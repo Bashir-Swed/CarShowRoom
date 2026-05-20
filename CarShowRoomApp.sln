@@ -9,9 +9,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CarShowRoom.DAL", "CarShowR
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CarShowRoom.BLL", "CarShowRoom.BLL\CarShowRoom.BLL.csproj", "{28A1699D-0EF4-440B-86C8-3E146222D22F}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8EC462FD-D22E-90A8-E5CE-7E832BA40C5D}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Database", "Database", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
 	ProjectSection(SolutionItems) = preProject
-		sql\script.sql = sql\script.sql
+		..\..\script.sql = ..\..\script.sql
 	EndProjectSection
 EndProject
 Global
