@@ -1,11 +1,13 @@
-﻿using System.Text;
+﻿using CarShowRoom.DAL.Repositories;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddScoped<CarShowRoom.DAL.Repositories.AuthRepository>();
+builder.Services.AddScoped<AuthRepository>();
+builder.Services.AddScoped<CarRepository>();
 
 builder.Services.AddControllers();
 
