@@ -20,8 +20,9 @@ namespace CarShowRoom.DAL.Repositories
             var cars = new List<Car>();
             using var conn = new SqlConnection(_connectionString);
 
-            string sql = @"SELECT c.*, ci.image_url 
+            string sql = @"SELECT c.*, b.name AS brand_name, ci.image_url 
                    FROM Cars c 
+                   JOIN Brands b ON c.brand_id = b.brand_id
                    LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
                    WHERE c.is_approved = 1";
 
@@ -58,7 +59,7 @@ namespace CarShowRoom.DAL.Repositories
             {
                 CarId = (int)reader["car_id"],
                 UserId = (int)reader["user_id"],
-                Brand = reader["brand"].ToString()!,
+                BrandId = (int)reader["brand_id"], 
                 Model = reader["model"].ToString()!,
                 Year = (int)reader["year"],
                 Price = (decimal)reader["price"],
@@ -68,11 +69,24 @@ namespace CarShowRoom.DAL.Repositories
                 IsApproved = (bool)reader["is_approved"],
                 RentPricePerDay = reader["rent_price_per_day"] as decimal?,
                 Status = reader["status"].ToString()!,
-                CreatedAt = (DateTime)reader["created_at"]
+                CreatedAt = (DateTime)reader["created_at"],
+                ApprovedBy = reader["approved_by"] != DBNull.Value ? (int?)reader["approved_by"] : null,
+                ApprovalNotes = reader.GetSchemaTable().Select("ColumnName = 'approval_notes'").Length > 0 && reader["approval_notes"] != DBNull.Value
+                        ? reader["approval_notes"].ToString() : null,
+                ApprovalDate = reader.GetSchemaTable().Select("ColumnName = 'approval_date'").Length > 0 && reader["approval_date"] != DBNull.Value
+                        ? (DateTime?)reader["approval_date"] : null,
+
+                Cylinders = reader["cylinders"] != DBNull.Value ? (int?)reader["cylinders"] : null,
+                InteriorColor = reader["interior_color"] != DBNull.Value ? reader["interior_color"].ToString() : null,
+                KeysCount = reader["keys_count"] != DBNull.Value ? (int?)reader["keys_count"] : null,
+                DriveType = reader["drive_type"] != DBNull.Value ? reader["drive_type"].ToString() : null,
+                Region = reader["region"] != DBNull.Value ? reader["region"].ToString() : null,
+                Horsepower = reader["horsepower"] != DBNull.Value ? (int?)reader["horsepower"] : null,
+                TopSpeed = reader["top_speed"] != DBNull.Value ? (int?)reader["top_speed"] : null
             };
         }
 
-        public async Task<bool> AddCarUsingSPAsync(Car car)
+        public async Task<Int32> AddCarUsingSPAsync(Car car)
         {
             using var conn = new SqlConnection(_connectionString);
             using var cmd = new SqlCommand("sp_AddCarWithImages", conn);
@@ -81,7 +95,7 @@ namespace CarShowRoom.DAL.Repositories
             string imagesCombined = string.Join(",", car.ImageUrls);
 
             cmd.Parameters.AddWithValue("@user_id", car.UserId);
-            cmd.Parameters.AddWithValue("@brand", car.Brand);
+            cmd.Parameters.AddWithValue("@BrandId", car.BrandId);
             cmd.Parameters.AddWithValue("@model", car.Model);
             cmd.Parameters.AddWithValue("@year", car.Year);
             cmd.Parameters.AddWithValue("@color", (object?)car.Color ?? DBNull.Value);
@@ -92,41 +106,46 @@ namespace CarShowRoom.DAL.Repositories
             cmd.Parameters.AddWithValue("@description", (object?)car.Description ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@image_urls", imagesCombined);
 
+            cmd.Parameters.AddWithValue("@cylinders", (object)car.Cylinders ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@interior_color", (object)car.InteriorColor ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@keys_count", (object)car.KeysCount ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@drive_type", (object)car.DriveType ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@region", (object)car.Region ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@horsepower", (object)car.Horsepower ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@top_speed", (object)car.TopSpeed ?? DBNull.Value);
+
             await conn.OpenAsync();
             var result = await cmd.ExecuteScalarAsync();
-            return result != null;
+            if (result != null && result != DBNull.Value)
+            {
+                return Convert.ToInt32(result);
+            }
+            return 0;
         }
 
-        public async Task<bool> ApproveCarAsync(int carId, int employeeId, string notes)
+        public async Task<string> ApproveCarAsync(int carId, int employeeId, string notes)
         {
             using var conn = new SqlConnection(_connectionString);
             using var cmd = new SqlCommand("sp_ApproveCar", conn);
             cmd.CommandType = CommandType.StoredProcedure;
 
             cmd.Parameters.AddWithValue("@car_id", carId);
-            cmd.Parameters.AddWithValue("@approved_by", employeeId);
-            cmd.Parameters.AddWithValue("@notes", (object?)notes ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@approved_by_admin_id", employeeId);
 
             await conn.OpenAsync();
-            try
-            {
-                await cmd.ExecuteNonQueryAsync();
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            var result = await cmd.ExecuteScalarAsync();
+            return result?.ToString() ?? "Error";
         }
         public async Task<List<Car>> GetPendingCarsAsync()
         {
             var cars = new List<Car>();
             using var conn = new SqlConnection(_connectionString);
 
-            string sql = @"SELECT c.*, ci.image_url 
+            string sql = @"SELECT c.*, b.name AS brand_name, ci.image_url 
                    FROM Cars c 
+                   JOIN Brands b ON c.brand_id = b.brand_id
                    LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
-                   WHERE c.is_approved = 0";
+                   WHERE c.is_approved=0";
 
             using var cmd = new SqlCommand(sql, conn);
             await conn.OpenAsync();
@@ -182,7 +201,7 @@ namespace CarShowRoom.DAL.Repositories
 
             cmd.Parameters.AddWithValue("@car_id", car.CarId);
             cmd.Parameters.AddWithValue("@user_id", car.UserId);
-            cmd.Parameters.AddWithValue("@brand", car.Brand);
+            cmd.Parameters.AddWithValue("@BrandId", car.BrandId);
             cmd.Parameters.AddWithValue("@model", car.Model);
             cmd.Parameters.AddWithValue("@year", car.Year);
             cmd.Parameters.AddWithValue("@color", (object?)car.Color ?? DBNull.Value);
@@ -237,14 +256,14 @@ namespace CarShowRoom.DAL.Repositories
             }
         }
 
-        public async Task<List<Car>> SearchCarsAsync(string? brand, string? model, decimal? minPrice, decimal? maxPrice, int? year, string? fuelType, string? gearType)
+        public async Task<List<Car>> SearchCarsAsync(int? brandId, string? model, decimal? minPrice, decimal? maxPrice, int? year, string? fuelType, string? gearType)
         {
             var cars = new List<Car>();
             using var conn = new SqlConnection(_connectionString);
             using var cmd = new SqlCommand("sp_SearchCars", conn);
             cmd.CommandType = CommandType.StoredProcedure;
 
-            cmd.Parameters.AddWithValue("@brand", (object?)brand ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@brandId", (object?)brandId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@model", (object?)model ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@minPrice", (object?)minPrice ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@maxPrice", (object?)maxPrice ?? DBNull.Value);
@@ -281,8 +300,9 @@ namespace CarShowRoom.DAL.Repositories
             var cars = new List<Car>();
             using var conn = new SqlConnection(_connectionString);
 
-            string sql = @"SELECT c.*, ci.image_url 
+            string sql = @"SELECT c.*, b.name AS brand_name, ci.image_url 
                    FROM Cars c 
+                   JOIN Brands b ON c.brand_id = b.brand_id
                    LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
                    WHERE c.user_id = @userId
                    ORDER BY c.created_at DESC";

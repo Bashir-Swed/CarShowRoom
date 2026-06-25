@@ -8,6 +8,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddScoped<AuthRepository>();
 builder.Services.AddScoped<CarRepository>();
+builder.Services.AddScoped<BrandRepository>();
+builder.Services.AddScoped<FavoritesRepository>();
+builder.Services.AddScoped<UserRepository>();
 
 builder.Services.AddControllers();
 

@@ -1,4 +1,5 @@
-﻿using CarShowRoom.DAL.Models.CarShowRoom.DAL.Models.CarShowRoom.DAL.Models;
+﻿using CarShowRoom.DAL.Models;
+using CarShowRoom.DAL.Models.CarShowRoom.DAL.Models.CarShowRoom.DAL.Models;
 using CarShowRoom.DAL.Repositories;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -28,16 +29,40 @@ namespace CarShowRoomApp.Controllers
         public async Task<IActionResult> AddCar([FromBody] Car car)
         {
             var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+            var userRole=User.FindFirst(System.Security.Claims.ClaimTypes.Role);
             if (userIdClaim == null) return Unauthorized();
 
             car.UserId = int.Parse(userIdClaim.Value);
 
-            var success = await _carRepo.AddCarUsingSPAsync(car);
+            try
+            {
 
-            if (success)
-                return Ok(new { Message = "Car added successfully and is awaiting approval." });
+                int newCarId = await _carRepo.AddCarUsingSPAsync(car);
+                if (newCarId > 0)
+                {
+                    if (User.IsInRole("Admin"))
+                    {
+                        return Ok(new
+                        {
+                            Message = "Car added and approved automatically by Admin.",
+                            CarId = newCarId,
+                            IsApproved = true
+                        });
+                    }
+                    return Ok(new
+                    {
+                        Message = "Car added successfully. Pending admin approval.",
+                        CarId = newCarId,
+                        IsApproved = false
+                    });
+                }
 
-            return BadRequest(new { Message = "Failed to add car." });
+                return BadRequest(new { Message = "Failed to add car." });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Message = ex.Message });
+            }
         }
 
         [HttpGet("pending-cars")]
@@ -79,12 +104,12 @@ namespace CarShowRoomApp.Controllers
         }
 
         [HttpGet("search")]
-        public async Task<IActionResult> Search([FromQuery] string? brand, [FromQuery] string? model,
+        public async Task<IActionResult> Search([FromQuery] int? brandId, [FromQuery] string? model,
                                         [FromQuery] decimal? minPrice, [FromQuery] decimal? maxPrice,
                                         [FromQuery] int? year, [FromQuery] string? fuelType,
                                         [FromQuery] string? gearType)
         {
-            var results = await _carRepo.SearchCarsAsync(brand, model, minPrice, maxPrice, year, fuelType, gearType);
+            var results = await _carRepo.SearchCarsAsync(brandId, model, minPrice, maxPrice, year, fuelType, gearType);
             return Ok(results);
         }
 

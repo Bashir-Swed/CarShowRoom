@@ -1,4 +1,5 @@
 ﻿using CarShowRoom.DAL.Models;
+using CarShowRoom.DAL.Models.CarShowRoom.DAL.Models.CarShowRoom.DAL.Models;
 using CarShowRoom.DAL.Repositories;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -17,22 +18,26 @@ namespace CarShowRoomApp.Controllers
         {
             _carRepo = carRepo;
         }
-        public AdminController(UserRepository userRepo)
-        {
-            _userRepo = userRepo;
-        }
 
         [HttpPatch("approve/{id}")]
         public async Task<IActionResult> ApproveCar(int id, [FromBody] string notes)
         {
-            var employeeId = int.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value!);
+            var adminId = int.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value!);
 
-            var success = await _carRepo.ApproveCarAsync(id, employeeId, notes);
+            try
+            {
+                var statusResult = await _carRepo.ApproveCarAsync(id , adminId , notes);
 
-            if (success)
-                return Ok(new { Message = "Car approved successfully." });
-
-            return BadRequest(new { Message = "Failed to approve car." });
+                return Ok(new
+                {
+                    Message = $"Car status updated successfully.",
+                    CurrentStatus = statusResult
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Message = ex.Message });
+            }
         }
 
         [Authorize(Roles = "Admin")]
