@@ -1,4 +1,5 @@
 ﻿using CarShowRoom.DAL.Models;
+using CarShowRoom.DAL.DTOs;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using System.Data;
@@ -14,7 +15,7 @@ public class BrandRepository
     {
         var brands = new List<Brand>();
         using var conn = new SqlConnection(_connectionString);
-        string sql = "SELECT brand_id, name FROM Brands ORDER BY name ASC";
+        string sql = "SELECT brand_id, name ,brand_logo_url,created_at FROM Brands ORDER BY name ASC";
 
         using var cmd = new SqlCommand(sql, conn);
         await conn.OpenAsync();
@@ -25,7 +26,9 @@ public class BrandRepository
             brands.Add(new Brand
             {
                 BrandId = (int)reader["brand_id"],
-                Name = reader["name"].ToString() ?? ""
+                Name = reader["name"].ToString() ?? "",
+                BrandLogoUrl = reader["brand_logo_url"] != DBNull.Value ? reader["brand_logo_url"].ToString() : null,
+                CreatedAt = reader["created_at"] != DBNull.Value ? (DateTime)reader["created_at"] : DateTime.MinValue
             });
         }
         return brands;
@@ -50,13 +53,14 @@ public class BrandRepository
         }
     }
 
-    public async Task<Brand?> AddBrandAsync(string brandName)
+    public async Task<Brand?> AddBrandAsync(BrandAddDto brand)
     {
         using var conn = new SqlConnection(_connectionString);
         using var cmd = new SqlCommand("sp_AddBrand", conn);
         cmd.CommandType = CommandType.StoredProcedure;
 
-        cmd.Parameters.AddWithValue("@name", brandName);
+        cmd.Parameters.AddWithValue("@name", brand.Name);
+        cmd.Parameters.AddWithValue("@brand_logo_url", (object?)brand.BrandLogoUrl ?? DBNull.Value);
 
         await conn.OpenAsync();
         try
@@ -67,7 +71,8 @@ public class BrandRepository
                 return new Brand
                 {
                     BrandId = Convert.ToInt32(result),
-                    Name = brandName
+                    Name = brand.Name,
+                    BrandLogoUrl = brand.BrandLogoUrl,
                 };
             }
             return null;

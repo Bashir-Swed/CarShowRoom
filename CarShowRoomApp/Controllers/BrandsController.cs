@@ -1,5 +1,8 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using CarShowRoom.DAL.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using CarShowRoom.DAL.DTOs;
+
 
 namespace CarShowRoomApp.Controllers
 {
@@ -36,16 +39,16 @@ namespace CarShowRoomApp.Controllers
 
         [Authorize(Roles = "Admin")]
         [HttpPost]
-        public async Task<IActionResult> AddBrand([FromBody] string brandName)
+        public async Task<IActionResult> AddBrand([FromBody] BrandAddDto brand)
         {
-            if (string.IsNullOrWhiteSpace(brandName))
+            if (string.IsNullOrWhiteSpace(brand.Name) || brand == null)
             {
                 return BadRequest(new { Message = "Brand name cannot be empty." });
             }
 
             try
             {
-                var newBrand = await _brandRepo.AddBrandAsync(brandName.Trim());
+                var newBrand = await _brandRepo.AddBrandAsync(brand);
                 return Ok(new { Message = "Brand added successfully.", Data = newBrand });
             }
             catch (Exception ex)

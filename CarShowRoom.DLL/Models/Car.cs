@@ -34,6 +34,8 @@
                 public string? Region { get; set; }
                 public int? Horsepower { get; set; }
                 public int? TopSpeed { get; set; }
+
+                public string? BrandLogoUrl { get; set; }
             }
         }
     }

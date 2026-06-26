@@ -20,7 +20,7 @@ namespace CarShowRoom.DAL.Repositories
             var cars = new List<Car>();
             using var conn = new SqlConnection(_connectionString);
 
-            string sql = @"SELECT c.*, b.name AS brand_name, ci.image_url 
+            string sql = @"SELECT c.*, b.name AS brand_name,b.brand_logo_url ,ci.image_url 
                    FROM Cars c 
                    JOIN Brands b ON c.brand_id = b.brand_id
                    LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
@@ -82,7 +82,10 @@ namespace CarShowRoom.DAL.Repositories
                 DriveType = reader["drive_type"] != DBNull.Value ? reader["drive_type"].ToString() : null,
                 Region = reader["region"] != DBNull.Value ? reader["region"].ToString() : null,
                 Horsepower = reader["horsepower"] != DBNull.Value ? (int?)reader["horsepower"] : null,
-                TopSpeed = reader["top_speed"] != DBNull.Value ? (int?)reader["top_speed"] : null
+                TopSpeed = reader["top_speed"] != DBNull.Value ? (int?)reader["top_speed"] : null,
+
+                BrandLogoUrl = reader.GetSchemaTable().Select("ColumnName = 'brand_logo_url'").Length > 0 && reader["brand_logo_url"] != DBNull.Value
+               ? reader["brand_logo_url"].ToString() : null,
             };
         }
 
@@ -141,7 +144,7 @@ namespace CarShowRoom.DAL.Repositories
             var cars = new List<Car>();
             using var conn = new SqlConnection(_connectionString);
 
-            string sql = @"SELECT c.*, b.name AS brand_name, ci.image_url 
+            string sql = @"SELECT c.*, b.name AS brand_name,b.brand_logo_url ,ci.image_url 
                    FROM Cars c 
                    JOIN Brands b ON c.brand_id = b.brand_id
                    LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
@@ -300,7 +303,7 @@ namespace CarShowRoom.DAL.Repositories
             var cars = new List<Car>();
             using var conn = new SqlConnection(_connectionString);
 
-            string sql = @"SELECT c.*, b.name AS brand_name, ci.image_url 
+            string sql = @"SELECT c.*, b.name AS brand_name,b.brand_logo_url ,ci.image_url 
                    FROM Cars c 
                    JOIN Brands b ON c.brand_id = b.brand_id
                    LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
