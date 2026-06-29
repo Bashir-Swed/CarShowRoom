@@ -8,17 +8,19 @@ namespace CarShowRoomApp.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "Admin,Employee")]
+    [Authorize(Roles = "Admin")]
     public class AdminController : ControllerBase
     {
         private readonly CarRepository _carRepo;
         private readonly UserRepository _userRepo;
 
-        public AdminController(CarRepository carRepo)
+        public AdminController(CarRepository carRepo , UserRepository userRepo)
         {
             _carRepo = carRepo;
+            _userRepo = userRepo;            
         }
 
+        [Authorize(Roles = "Admin")]
         [HttpPatch("approve/{id}")]
         public async Task<IActionResult> ApproveCar(int id, [FromBody] string notes)
         {
@@ -55,7 +57,7 @@ namespace CarShowRoomApp.Controllers
             if (success)
                 return Ok(new { Message = "User and all related data deleted successfully." });
 
-            return BadRequest(new { Message = "Failed to delete user. Check if the user has active orders." });
+            return BadRequest(new { Message = "Failed to delete user" });
         }
     }
 }

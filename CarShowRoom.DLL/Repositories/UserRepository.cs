@@ -1,16 +1,17 @@
 ﻿using Microsoft.Data.SqlClient;
-using System;
-using System.Collections.Generic;
 using System.Data;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 
 namespace CarShowRoom.DAL.Repositories
 {
     public class UserRepository
     {
         private readonly string _connectionString;
+
+        public UserRepository(IConfiguration configuration)
+        {
+            _connectionString = configuration.GetConnectionString("DefaultConnection")!;
+        }
         public async Task<bool> DeleteUserAsync(int userId)
         {
             using var conn = new SqlConnection(_connectionString);
@@ -22,8 +23,8 @@ namespace CarShowRoom.DAL.Repositories
             await conn.OpenAsync();
             try
             {
-                await cmd.ExecuteNonQueryAsync();
-                return true;
+                var result = await cmd.ExecuteScalarAsync();
+                return result != null && Convert.ToInt32(result) == 1;
             }
             catch
             {

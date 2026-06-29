@@ -19,7 +19,7 @@
                 public string? Description { get; set; } 
                 public bool IsApproved { get; set; }     
                 public decimal? RentPricePerDay { get; set; } 
-                public string Status { get; set; } = "Available";
+                public string Status { get; set; } = "Pending";
                 public DateTime CreatedAt { get; set; }  
                 public int? ApprovedBy { get; set; }    
                 public string? ApprovalNotes { get; set; } 
