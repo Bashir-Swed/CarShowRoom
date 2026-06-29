@@ -66,8 +66,9 @@ public class AuthController : ControllerBase
         }
 
         string token = CreateJwtToken(user);
+        string role = user.Role;
 
-        return Ok(new { Token = token, Message = "Login Successful" });
+        return Ok(new { Token = token, Message = "Login Successful" ,role});
     }
 
     [Authorize]
