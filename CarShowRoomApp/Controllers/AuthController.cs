@@ -184,4 +184,12 @@ public class AuthController : ControllerBase
         return Ok(profile);
     }
 
+    [Authorize(Roles = "Admin")]
+    [HttpGet("all_users")]
+    public async Task<IActionResult> GetAllUsers()
+    {
+        var users = await _authRepo.GetAllUsersAsync();
+        return Ok(users);
+    }
+
 }

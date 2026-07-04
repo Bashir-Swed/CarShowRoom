@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using CarShowRoom.DAL.DTOs;
+using CarShowRoomApp.Services;
 
 
 namespace CarShowRoomApp.Controllers
@@ -11,33 +12,55 @@ namespace CarShowRoomApp.Controllers
     public class BrandsController : ControllerBase
     {
         private readonly BrandRepository _brandRepo;
+        private readonly ImageService _imageService;
 
-        public BrandsController(BrandRepository brandRepo)
+        public BrandsController(BrandRepository brandRepo, ImageService imageService)
         {
             _brandRepo = brandRepo;
+            _imageService = imageService;
         }
 
         // GET: api/Brands
-        [HttpGet]
+        [HttpGet("All-Brands")]
         public async Task<IActionResult> GetBrands()
         {
             var brands = await _brandRepo.GetAllBrandsAsync();
             return Ok(brands);
+        }
+        [HttpGet]
+        public async Task<IActionResult>GetBrandByID(int id)
+        {
+            var brand = await _brandRepo.GetBrandByIDAsync(id);
+            return Ok(brand);
         }
 
         [Authorize(Roles = "Admin")]
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteBrand(int id)
         {
-            var success = await _brandRepo.DeleteBrandAsync(id);
+            try
+            {
+                string? imageUrl = await _brandRepo.GetBrandImageUrlAsync(id);
 
-            if (success)
-                return Ok(new { Message = "Brand deleted successfully." });
+                bool success = await _brandRepo.DeleteBrandAsync(id);
 
-            return BadRequest(new { Message = "Failed to delete brand. Make sure no cars are linked to this brand." });
+                if (!success)
+                    return NotFound(new { Message = "Brand not found or could not be deleted." });
+
+                if (!string.IsNullOrEmpty(imageUrl))
+                {
+                    _imageService.DeleteImage(imageUrl);
+                }
+
+                return Ok(new { Message = "Brand and its image deleted successfully." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = ex.Message });
+            }
         }
 
-        [Authorize(Roles = "Admin")]
+/*        [Authorize(Roles = "Admin")]
         [HttpPost]
         public async Task<IActionResult> AddBrand([FromBody] BrandAddDto brand)
         {
@@ -54,6 +77,68 @@ namespace CarShowRoomApp.Controllers
             catch (Exception ex)
             {
                 return BadRequest(new { Message = ex.Message });
+            }
+        }*/
+        
+        [Authorize(Roles = "Admin")]
+        [HttpPost]
+        public async Task<IActionResult> CreateBrand([FromForm] BrandCreateDto dto)
+        {
+            try
+            {
+                string imageUrl = string.Empty;
+
+                if (dto.ImageFile != null)
+                {
+                    imageUrl = await _imageService.SaveImageAsync(dto.ImageFile, "brands");
+                }
+
+                BrandAddDto brand = new BrandAddDto();
+                brand.BrandLogoUrl = imageUrl;
+                brand.Name = dto.BrandName;
+                var success = await _brandRepo.AddBrandAsync(brand);
+
+                if (success!=null)
+                    return Ok(new { Message = "Brand created successfully", ImagePath = imageUrl, BrandId = success.BrandId, BrandName = success.Name });
+
+                return BadRequest(new { Message = "Failed to create brand." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = ex.Message });
+            }
+        }
+
+        [Authorize(Roles = "Admin")]
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateBrand(int id, [FromForm] BrandUpdateDto dto)
+        {
+            try
+            {
+                string? newImageUrl = null;
+
+                if (dto.ImageFile != null)
+                {
+                    string? oldImageUrl = await _brandRepo.GetBrandImageUrlAsync(id);
+
+                    if (!string.IsNullOrEmpty(oldImageUrl))
+                    {
+                        _imageService.DeleteImage(oldImageUrl);
+                    }
+
+                    newImageUrl = await _imageService.SaveImageAsync(dto.ImageFile, "brands");
+                }
+
+                bool success = await _brandRepo.UpdateBrandAsync(id, dto.BrandName, newImageUrl);
+
+                if (success)
+                    return Ok(new { Message = "Brand updated successfully", NewImagePath = newImageUrl });
+
+                return NotFound(new { Message = "Brand not found." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = ex.Message });
             }
         }
     }

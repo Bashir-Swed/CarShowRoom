@@ -34,6 +34,28 @@ public class BrandRepository
         return brands;
     }
 
+    public async Task<Brand> GetBrandByIDAsync(int id)
+    {
+        using var conn = new SqlConnection(_connectionString);
+        string sql = "SELECT name ,brand_logo_url,created_at FROM Brands where brand_id=@brand_id";
+        using var cmd = new SqlCommand(sql, conn); await conn.OpenAsync();
+        cmd.Parameters.AddWithValue("@brand_id", id);
+        using var reader = await cmd.ExecuteReaderAsync();
+        if ( await reader.ReadAsync())
+        {
+            return new Brand
+            {
+                BrandId = id,
+                Name = reader["name"].ToString() ?? "",
+                BrandLogoUrl = reader["brand_logo_url"] != DBNull.Value ? reader["brand_logo_url"].ToString() : null,
+                CreatedAt = reader["created_at"] != DBNull.Value ? (DateTime)reader["created_at"] : DateTime.MinValue
+
+            };
+        }
+        return null;
+
+    }
+
     public async Task<bool> DeleteBrandAsync(int brandId)
     {
         using var conn = new SqlConnection(_connectionString);
@@ -72,7 +94,6 @@ public class BrandRepository
                 {
                     BrandId = Convert.ToInt32(result),
                     Name = brand.Name,
-                    BrandLogoUrl = brand.BrandLogoUrl,
                 };
             }
             return null;
@@ -81,5 +102,36 @@ public class BrandRepository
         {
             throw new Exception(ex.Message);
         }
+    }
+
+    public async Task<bool> UpdateBrandAsync(int brandId, string brandName, string? imageUrl)
+    {
+        using var conn = new SqlConnection(_connectionString);
+        using var cmd = new SqlCommand("sp_UpdateBrand", conn);
+        cmd.CommandType = CommandType.StoredProcedure;
+
+        cmd.Parameters.AddWithValue("@brand_id", brandId);
+        cmd.Parameters.AddWithValue("@brand_name", brandName);
+
+        cmd.Parameters.AddWithValue("@image_url", (object?)imageUrl ?? DBNull.Value);
+
+        await conn.OpenAsync();
+        int rowsAffected = await cmd.ExecuteNonQueryAsync();
+
+        return rowsAffected > 0;
+    }
+
+    public async Task<string?> GetBrandImageUrlAsync(int brandId)
+    {
+        using var conn = new SqlConnection(_connectionString);
+
+        using var cmd = new SqlCommand("SELECT brand_logo_url FROM Brands WHERE brand_id = @brand_id", conn);
+        cmd.Parameters.AddWithValue("@brand_id", brandId);
+
+        await conn.OpenAsync();
+
+        var result = await cmd.ExecuteScalarAsync();
+
+        return result != DBNull.Value ? result?.ToString() : null;
     }
 }

@@ -14,6 +14,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Database", "Database", "{8E
 		Database\script.sql = Database\script.sql
 		Database\script2.sql = Database\script2.sql
 		Database\script4.sql = Database\script4.sql
+		Database\script5.sql = Database\script5.sql
+		Database\sctipt6.sql = Database\sctipt6.sql
 	EndProjectSection
 EndProject
 Global

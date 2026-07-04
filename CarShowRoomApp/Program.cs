@@ -1,4 +1,5 @@
 ﻿using CarShowRoom.DAL.Repositories;
+using CarShowRoomApp.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -11,6 +12,7 @@ builder.Services.AddScoped<CarRepository>();
 builder.Services.AddScoped<BrandRepository>();
 builder.Services.AddScoped<FavoritesRepository>();
 builder.Services.AddScoped<UserRepository>();
+builder.Services.AddScoped<ImageService>();
 
 builder.Services.AddControllers();
 
@@ -71,6 +73,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseAuthentication();
+app.UseStaticFiles();
 app.UseAuthorization();
 
 app.MapControllers();

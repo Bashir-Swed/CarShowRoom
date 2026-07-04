@@ -155,6 +155,32 @@ namespace CarShowRoom.DAL.Repositories
             return null;
         }
 
+        public async Task<List<User?>?> GetAllUsersAsync()
+        {
+            var user = new List<User>();
+            using var connection = new SqlConnection(_connectionString);
+            using var command = new SqlCommand("select * from Users", connection);
+            await connection.OpenAsync();
+            using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                user.Add(
+                    new User
+                    {
+                        UserId = (int)reader["user_id"],
+                        FullName = reader["full_name"].ToString() ?? "",
+                        Email = reader["email"].ToString() ?? "",
+                        Password = reader["password"].ToString() ?? "",
+                        Phone = reader["phone"].ToString() ?? "",
+                        Role = reader["role"].ToString() ?? "" ,
+                        Address =reader["address"].ToString() ?? "",
+                        CreatedAt = (DateTime)reader["created_at"]
+                    }
+                    );
+            }
+            return user ?? null;
+        }
+
 
     }
 }
