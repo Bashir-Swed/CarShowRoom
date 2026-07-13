@@ -6,7 +6,7 @@ namespace CarShowRoom.DAL.DTOs
     public class CarCreateDto
     {
         public int BrandId { get; set; }
-        public string Model { get; set; } = string.Empty;
+        public string? Model { get; set; } = null;
         public int Year { get; set; }
         public string? Color { get; set; }
         public decimal Price { get; set; }
