@@ -1,6 +1,7 @@
 ﻿using CarShowRoom.DAL.Models;
 using CarShowRoom.DAL.Models.CarShowRoom.DAL.Models.CarShowRoom.DAL.Models;
 using Microsoft.Data.SqlClient;
+using CarShowRoom.DAL.DTOs;
 using Microsoft.Extensions.Configuration;
 using System.Data;
 
@@ -89,7 +90,7 @@ namespace CarShowRoom.DAL.Repositories
             };
         }
 
-        public async Task<Int32> AddCarUsingSPAsync(Car car)
+        public async Task<Int32> AddCarUsingSPAsync(CarCreateDto car,int UserId)
         {
             using var conn = new SqlConnection(_connectionString);
             using var cmd = new SqlCommand("sp_AddCarWithImages", conn);
@@ -97,7 +98,7 @@ namespace CarShowRoom.DAL.Repositories
 
             string imagesCombined = string.Join(",", car.ImageUrls);
 
-            cmd.Parameters.AddWithValue("@user_id", car.UserId);
+            cmd.Parameters.AddWithValue("@user_id", UserId);
             cmd.Parameters.AddWithValue("@BrandId", car.BrandId);
             cmd.Parameters.AddWithValue("@model", car.Model);
             cmd.Parameters.AddWithValue("@year", car.Year);
@@ -109,13 +110,13 @@ namespace CarShowRoom.DAL.Repositories
             cmd.Parameters.AddWithValue("@description", (object?)car.Description ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@image_urls", imagesCombined);
 
-            cmd.Parameters.AddWithValue("@cylinders", (object)car.Cylinders ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@interior_color", (object)car.InteriorColor ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@keys_count", (object)car.KeysCount ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@drive_type", (object)car.DriveType ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@region", (object)car.Region ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@horsepower", (object)car.Horsepower ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@top_speed", (object)car.TopSpeed ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@cylinders", (object?)car.Cylinders ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@interior_color", (object?)car.InteriorColor ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@keys_count", (object?)car.KeysCount ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@drive_type", (object?)car.DriveType ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@region", (object?)car.Region ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@horsepower", (object?)car.Horsepower ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@top_speed", (object?)car.TopSpeed ?? DBNull.Value);
 
             await conn.OpenAsync();
             var result = await cmd.ExecuteScalarAsync();
@@ -196,17 +197,19 @@ namespace CarShowRoom.DAL.Repositories
             }
         }
 
-        public async Task<bool> UpdateCarAsync(Car car)
+        public async Task<bool> UpdateCarAsync(CarCreateDto car,int UserId,int CarId)
         {
             using var conn = new SqlConnection(_connectionString);
             using var cmd = new SqlCommand("sp_UpdateCar", conn);
             cmd.CommandType = CommandType.StoredProcedure;
+            string imagesCombined = string.Join(",", car.ImageUrls);
 
-            cmd.Parameters.AddWithValue("@car_id", car.CarId);
-            cmd.Parameters.AddWithValue("@user_id", car.UserId);
+            cmd.Parameters.AddWithValue("@car_id", CarId);
+            cmd.Parameters.AddWithValue("@user_id", UserId);
             cmd.Parameters.AddWithValue("@BrandId", car.BrandId);
             cmd.Parameters.AddWithValue("@model", car.Model);
             cmd.Parameters.AddWithValue("@year", car.Year);
+            cmd.Parameters.AddWithValue("@image_urls", imagesCombined);
             cmd.Parameters.AddWithValue("@color", (object?)car.Color ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@price", car.Price);
             cmd.Parameters.AddWithValue("@fuel_type", (object?)car.FuelType ?? DBNull.Value);
@@ -341,6 +344,27 @@ namespace CarShowRoom.DAL.Repositories
                 }
             }
             return cars;
+        }
+
+        public async Task<List<string>> GetCarImagesAsync(int carId)
+        {
+            List<string> imageUrls = new List<string>();
+
+            using var conn = new SqlConnection(_connectionString);
+            using var cmd = new SqlCommand("SELECT image_url FROM Car_Images WHERE car_id = @car_id;", conn);
+
+            cmd.Parameters.AddWithValue("@car_id", carId);
+
+            await conn.OpenAsync();
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                string url = reader.GetString(reader.GetOrdinal("image_url"));
+                imageUrls.Add(url);
+            }
+
+            return imageUrls;
         }
 
     }

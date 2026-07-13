@@ -1,8 +1,11 @@
-﻿using CarShowRoom.DAL.Models;
+﻿using CarShowRoom.DAL.DTOs;
+using CarShowRoom.DAL.Models;
 using CarShowRoom.DAL.Models.CarShowRoom.DAL.Models.CarShowRoom.DAL.Models;
 using CarShowRoom.DAL.Repositories;
+using CarShowRoomApp.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using CarShowRoomApp.Services;
 
 namespace CarShowRoomApp.Controllers
 {
@@ -11,10 +14,12 @@ namespace CarShowRoomApp.Controllers
     public class CarsController : ControllerBase
     {
         private readonly CarRepository _carRepo;
+        private readonly ImageService _imageService;
 
-        public CarsController(CarRepository carRepo)
+        public CarsController(CarRepository carRepo,ImageService imageService)
         {
             _carRepo = carRepo;
+            _imageService = imageService;
         }
 
         [HttpGet]
@@ -26,18 +31,30 @@ namespace CarShowRoomApp.Controllers
 
         [Authorize]
         [HttpPost("add")]
-        public async Task<IActionResult> AddCar([FromBody] Car car)
+        public async Task<IActionResult> AddCar([FromForm] CarCreateDto car)
         {
             var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
             var userRole=User.FindFirst(System.Security.Claims.ClaimTypes.Role);
             if (userIdClaim == null) return Unauthorized();
 
-            car.UserId = int.Parse(userIdClaim.Value);
+            int UserId = int.Parse(userIdClaim.Value);
 
             try
             {
+                List<string> uploadedImagesUrls = new List<string>();
 
-                int newCarId = await _carRepo.AddCarUsingSPAsync(car);
+                if (car.Images != null && car.Images.Count > 0)
+                {
+                    foreach (var imageFile in car.Images)
+                    {
+                        string imageUrl = await _imageService.SaveImageAsync(imageFile, "cars");
+
+                        uploadedImagesUrls.Add(imageUrl);
+                    }
+                }
+                car.ImageUrls = uploadedImagesUrls;
+
+                int newCarId = await _carRepo.AddCarUsingSPAsync(car,UserId);
                 if (newCarId > 0)
                 {
                     if (User.IsInRole("Admin"))
@@ -77,30 +94,87 @@ namespace CarShowRoomApp.Controllers
         public async Task<IActionResult> DeleteCar(int id)
         {
             var userId = int.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value!);
+            try
+            {
+                List<string> imageUrls = await _carRepo.GetCarImagesAsync(id);
 
-            var success = await _carRepo.DeleteCarAsync(id, userId);
+                var success = await _carRepo.DeleteCarAsync(id, userId);
 
-            if (success)
-                return Ok(new { Message = "Car deleted successfully." });
+                if (success)
+                {
+                    if (imageUrls != null && imageUrls.Count > 0)
+                    {
+                        foreach (string url in imageUrls)
+                        {
+                            _imageService.DeleteImage(url);
+                        }
+                    }
+                    return Ok(new { Message = "Car and all its related images deleted successfully." });
+                }
+                else
+                    return BadRequest(new { Message = "Failed to delete car. You might not have permission." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = ex.Message });
+            }
 
-            return BadRequest(new { Message = "Failed to delete car. You might not have permission." });
         }
 
         [Authorize]
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateCar(int id, [FromBody] Car car)
+        public async Task<IActionResult> UpdateCar(int id, [FromForm] CarCreateDto car)
         {
             var currentUserId = int.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value!);
+            
+            int UserId = currentUserId;
+            try
+            {
+             
+                List<string> oldImageUrls = await _carRepo.GetCarImagesAsync(id);
+                List<string> newImageUrls =  new List<string>();
 
-            car.CarId = id;
-            car.UserId = currentUserId;
+                if(car.Images != null && car.Images.Count > 0)
+{
+                    foreach (var imageFile in car.Images)
+                    {
+                        string imageUrl = await _imageService.SaveImageAsync(imageFile, "cars");
+                        newImageUrls.Add(imageUrl);
+                    }
+                    car.ImageUrls = newImageUrls;
+                }
 
-            var success = await _carRepo.UpdateCarAsync(car);
+                var success = await _carRepo.UpdateCarAsync(car,UserId,id);
+                if (success)
+                {
+                    if (car.Images != null && car.Images.Count > 0 && oldImageUrls != null)
+                    {
+                        foreach (var url in oldImageUrls)
+                        {
+                            _imageService.DeleteImage(url);
+                        }
+                    }
 
-            if (success)
-                return Ok(new { Message = "Car information updated successfully and is pending re-approval." });
+                    return Ok(new { Message = "Car information updated successfully and is pending re-approval." });
+                }
+                else
+                {
+                    if (newImageUrls.Count > 0)
+                    {
+                        foreach (var url in newImageUrls)
+                        {
+                            _imageService.DeleteImage(url);
+                        }
+                    }
 
-            return BadRequest(new { Message = "Failed to update car information." });
+                    return BadRequest(new { Message = "Failed to update car information." });
+                }
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = ex.Message });
+            }
+
         }
 
         [HttpGet("search")]

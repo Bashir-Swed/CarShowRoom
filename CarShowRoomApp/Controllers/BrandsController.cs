@@ -117,24 +117,33 @@ namespace CarShowRoomApp.Controllers
             {
                 string? newImageUrl = null;
 
+                string? oldImageUrl = await _brandRepo.GetBrandImageUrlAsync(id);
+
                 if (dto.ImageFile != null)
                 {
-                    string? oldImageUrl = await _brandRepo.GetBrandImageUrlAsync(id);
+                    newImageUrl = await _imageService.SaveImageAsync(dto.ImageFile, "brands");
 
+                }
+
+                bool success = await _brandRepo.UpdateBrandAsync(id, dto.BrandName, newImageUrl);
+                if (success)
+                {
                     if (!string.IsNullOrEmpty(oldImageUrl))
                     {
                         _imageService.DeleteImage(oldImageUrl);
                     }
-
-                    newImageUrl = await _imageService.SaveImageAsync(dto.ImageFile, "brands");
-                }
-
-                bool success = await _brandRepo.UpdateBrandAsync(id, dto.BrandName, newImageUrl);
-
-                if (success)
                     return Ok(new { Message = "Brand updated successfully", NewImagePath = newImageUrl });
 
-                return NotFound(new { Message = "Brand not found." });
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(newImageUrl))
+                    {
+                        _imageService.DeleteImage(newImageUrl);
+                    }
+                    return BadRequest(new { Message = "Failed to update brand information." });
+                }
+
             }
             catch (Exception ex)
             {

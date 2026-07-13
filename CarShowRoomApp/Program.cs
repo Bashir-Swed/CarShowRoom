@@ -71,6 +71,14 @@ if (app.Environment.IsDevelopment())
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "Car Showroom API v1");
     });
 }
+var webRootPath = builder.Environment.WebRootPath;
+if (!Directory.Exists(webRootPath))
+{
+    Directory.CreateDirectory(webRootPath);
+    Directory.CreateDirectory(Path.Combine(webRootPath, "images", "brands"));
+    Directory.CreateDirectory(Path.Combine(webRootPath, "images", "cars"));
+    Directory.CreateDirectory(Path.Combine(webRootPath, "images", "profiles"));
+}
 
 app.UseAuthentication();
 app.UseStaticFiles();
