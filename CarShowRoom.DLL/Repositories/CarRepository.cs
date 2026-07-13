@@ -367,5 +367,27 @@ namespace CarShowRoom.DAL.Repositories
             return imageUrls;
         }
 
+        public async Task<Car?> GetCarInfoOnlyByIdAsync(int carId)
+        {
+            string query = "SELECT * FROM Cars WHERE car_id = @car_id;";
+
+            using var conn = new SqlConnection(_connectionString);
+            using var cmd = new SqlCommand(query, conn);
+
+            cmd.CommandType = CommandType.Text;
+            cmd.Parameters.AddWithValue("@car_id", carId);
+
+            await conn.OpenAsync();
+            using var reader = await cmd.ExecuteReaderAsync();
+
+            if (await reader.ReadAsync())
+            {
+                var car = MapToCar(reader);
+                return car;
+            }
+
+            return null;
+        }
+
     }
 }

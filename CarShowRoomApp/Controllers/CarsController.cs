@@ -217,5 +217,39 @@ namespace CarShowRoomApp.Controllers
             }
         }
 
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetCarById(int id)
+        {
+            try
+            {
+                var car = await _carRepo.GetCarInfoOnlyByIdAsync(id);
+
+                if (car == null)
+                {
+                    return NotFound(new { Message = $"Car with ID {id} was not found." });
+                }
+
+                return Ok(car);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = "An error occurred while retrieving the car data.", Details = ex.Message });
+            }
+        }
+
+        [HttpGet("{id}/images")]
+        public async Task<IActionResult> GetCarImages(int id)
+        {
+            try
+            {
+                List<string> imageUrls = await _carRepo.GetCarImagesAsync(id);
+                return Ok(imageUrls);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Message = "An error occurred while fetching car images.", Details = ex.Message });
+            }
+        }
+
     }
 }
