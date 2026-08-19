@@ -5,7 +5,6 @@ using CarShowRoom.DAL.Repositories;
 using CarShowRoomApp.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using CarShowRoomApp.Services;
 
 namespace CarShowRoomApp.Controllers
 {

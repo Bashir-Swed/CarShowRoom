@@ -107,6 +107,7 @@ namespace CarShowRoom.DAL.Repositories
             cmd.Parameters.AddWithValue("@fuel_type", (object?)car.FuelType ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@gear_type", (object?)car.GearType ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@mileage", car.Mileage);
+            cmd.Parameters.AddWithValue("@rent_price_per_day", (object?)car.RentPricePerDay ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@description", (object?)car.Description ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@image_urls", imagesCombined);
 
