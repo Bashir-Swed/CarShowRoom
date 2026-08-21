@@ -14,6 +14,7 @@ public class OrderDetailsDto
     public List<string> DocumentUrls { get; set; } = new();
 
     public RentOrderDetailsDto? RentDetails { get; set; }
+    public InstallmentOrderSummaryDto? InstallmentDetails { get; set; }
     // public BuyOrderDetailsDto? BuyDetails { get; set; }
 }
 

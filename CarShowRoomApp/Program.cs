@@ -14,6 +14,7 @@ builder.Services.AddScoped<FavoritesRepository>();
 builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<ImageService>();
 builder.Services.AddScoped<OrderRepository>();
+builder.Services.AddScoped<TransactionRepository>();
 
 builder.Services.AddControllers();
 builder.Services.AddControllers()

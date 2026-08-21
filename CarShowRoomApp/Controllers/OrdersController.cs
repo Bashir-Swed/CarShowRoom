@@ -261,5 +261,74 @@ namespace CarShowRoom.API.Controllers
                 return StatusCode(500, new { message = "An error occurred.", details = ex.Message });
             }
         }
+
+        [HttpPost("installment")]
+        public async Task<IActionResult> CreateInstallmentOrder([FromForm] InstallmentOrderCreateDto dto)
+        {
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+            if (userIdClaim == null)
+            {
+                return Unauthorized(new { message = "User not found or not authenticated." });
+            }
+            int userId = int.Parse(userIdClaim.Value);
+
+            List<string> documentUrls = new List<string>();
+            List<string> physicalFilePaths = new List<string>();
+
+            try
+            {
+                if (dto.Documents != null && dto.Documents.Count > 0)
+                {
+                    string uploadsFolder = Path.Combine(_env.WebRootPath, "Uploads", "Orders");
+
+                    if (!Directory.Exists(uploadsFolder))
+                    {
+                        Directory.CreateDirectory(uploadsFolder);
+                    }
+
+                    foreach (var file in dto.Documents)
+                    {
+                        if (file.Length > 0)
+                        {
+                            string uniqueFileName = Guid.NewGuid().ToString() + "_" + file.FileName;
+                            string filePath = Path.Combine(uploadsFolder, uniqueFileName);
+
+                            using (var fileStream = new FileStream(filePath, FileMode.Create))
+                            {
+                                await file.CopyToAsync(fileStream);
+                            }
+
+                            physicalFilePaths.Add(filePath);
+                            documentUrls.Add($"/Uploads/Orders/{uniqueFileName}");
+                        }
+                    }
+                }
+
+                int orderId = await _orderRepo.AddInstallmentOrderAsync(dto, userId, documentUrls);
+
+                if (orderId > 0)
+                {
+                    return Ok(new { message = "Installment order created successfully.", id = orderId });
+                }
+
+                return BadRequest(new { message = "Failed to create the installment order." });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                foreach (var path in physicalFilePaths)
+                {
+                    if (System.IO.File.Exists(path))
+                    {
+                        System.IO.File.Delete(path);
+                    }
+                }
+
+                return StatusCode(500, new { message = "An error occurred.", details = ex.Message });
+            }
+        }
     }
 }

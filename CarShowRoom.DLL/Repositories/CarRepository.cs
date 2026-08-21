@@ -25,7 +25,7 @@ namespace CarShowRoom.DAL.Repositories
                    FROM Cars c 
                    JOIN Brands b ON c.brand_id = b.brand_id
                    LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
-                   WHERE c.is_approved = 1";
+                   WHERE c.is_approved = 1 and c.status = 2";
 
             using var cmd = new SqlCommand(sql, conn);
             await conn.OpenAsync();
@@ -69,7 +69,7 @@ namespace CarShowRoom.DAL.Repositories
                 Mileage = (int)reader["mileage"],
                 IsApproved = (bool)reader["is_approved"],
                 RentPricePerDay = reader["rent_price_per_day"] as decimal?,
-                Status = reader["status"].ToString()!,
+                Status = (CarStatus)(int)reader["status"],
                 CreatedAt = (DateTime)reader["created_at"],
                 ApprovedBy = reader["approved_by"] != DBNull.Value ? (int?)reader["approved_by"] : null,
                 ApprovalNotes = reader.GetSchemaTable().Select("ColumnName = 'approval_notes'").Length > 0 && reader["approval_notes"] != DBNull.Value
@@ -109,6 +109,7 @@ namespace CarShowRoom.DAL.Repositories
             cmd.Parameters.AddWithValue("@mileage", car.Mileage);
             cmd.Parameters.AddWithValue("@rent_price_per_day", (object?)car.RentPricePerDay ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@description", (object?)car.Description ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@status",(int)CarStatus.Pending);
             cmd.Parameters.AddWithValue("@image_urls", imagesCombined);
 
             cmd.Parameters.AddWithValue("@cylinders", (object?)car.Cylinders ?? DBNull.Value);
@@ -150,7 +151,7 @@ namespace CarShowRoom.DAL.Repositories
                    FROM Cars c 
                    JOIN Brands b ON c.brand_id = b.brand_id
                    LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
-                   WHERE c.is_approved=0";
+                   WHERE c.is_approved=0 and c.status = 1";
 
             using var cmd = new SqlCommand(sql, conn);
             await conn.OpenAsync();

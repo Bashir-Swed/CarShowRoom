@@ -15,6 +15,7 @@ namespace CarShowRoom.DAL.DTOs
         public int? Mileage { get; set; }
         public string? Description { get; set; }
         public decimal? RentPricePerDay { get; set; } = 0;
+        public CarStatus Status { get; set; } = CarStatus.Pending;
 
         public List<string>? ImageUrls { get; set; } = new List<string>();
 
