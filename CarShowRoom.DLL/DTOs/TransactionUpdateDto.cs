@@ -1,11 +1,8 @@
 ﻿using Microsoft.AspNetCore.Http;
 using System.ComponentModel.DataAnnotations;
 
-public class TransactionCreateDto
+public class TransactionUpdateDto
 {
-    [Range(1, int.MaxValue)]
-    public int OrderId { get; set; }
-
     [Range(
         typeof(decimal),
         "0.01",
@@ -15,14 +12,14 @@ public class TransactionCreateDto
 
     [Required]
     [MaxLength(50)]
-    public string PaymentMethod { get; set; } = "Cash";
+    public string PaymentMethod { get; set; }
+        = string.Empty;
 
     [EnumDataType(typeof(TransactionType))]
     public TransactionType TransactionType { get; set; }
 
     [EnumDataType(typeof(TransactionStatus))]
     public TransactionStatus Status { get; set; }
-        = TransactionStatus.Completed;
 
     [MaxLength(100)]
     public string? ReferenceNumber { get; set; }
@@ -30,5 +27,9 @@ public class TransactionCreateDto
     [MaxLength(4000)]
     public string? Notes { get; set; }
 
-    public List<IFormFile>? ContractImages { get; set; } = new();
+    public List<IFormFile>? NewContractImages { get; set; }
+        = new();
+
+    public List<int>? ContractImageIdsToDelete { get; set; }
+        = new();
 }

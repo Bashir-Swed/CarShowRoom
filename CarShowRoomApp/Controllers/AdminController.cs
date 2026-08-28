@@ -1,6 +1,4 @@
-﻿using CarShowRoom.DAL.Models;
-using CarShowRoom.DAL.Models.CarShowRoom.DAL.Models.CarShowRoom.DAL.Models;
-using CarShowRoom.DAL.Repositories;
+﻿using CarShowRoom.DAL.Repositories;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -58,6 +56,53 @@ namespace CarShowRoomApp.Controllers
                 return Ok(new { Message = "User and all related data deleted successfully." });
 
             return BadRequest(new { Message = "Failed to delete user" });
+        }
+       
+        [HttpPatch("reject/{id}")]
+        public async Task<IActionResult> RejectCar(int id, [FromBody] string notes)
+        {
+            if (string.IsNullOrWhiteSpace(notes))
+            {
+                return BadRequest(new
+                {
+                    Message = "Rejection reason is required."
+                });
+            }
+
+            var adminId = int.Parse(
+                User.FindFirst(
+                    System.Security.Claims.ClaimTypes.NameIdentifier
+                )?.Value!
+            );
+
+            try
+            {
+                var statusResult =
+                    await _carRepo.RejectCarAsync(id, adminId, notes);
+
+                return Ok(new
+                {
+                    Message = "Car rejected successfully.",
+                    CurrentStatus = statusResult
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Message = ex.Message });
+            }
+        }
+
+        [HttpGet("cars")]
+        public async Task<IActionResult> GetCars([FromQuery]CarApprovalStatus? approvalStatus,[FromQuery]CarAvailabilityStatus? availabilityStatus,[FromQuery]int? ownerId)
+        {
+            var cars =
+                await _carRepo.GetCarsForAdminAsync(
+                    approvalStatus,
+                    availabilityStatus,
+                    ownerId
+                );
+
+            return Ok(cars);
         }
     }
 }

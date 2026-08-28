@@ -93,68 +93,119 @@ namespace CarShowRoom.DAL.Repositories
         {
             using var conn = new SqlConnection(_connectionString);
             await conn.OpenAsync();
-            using var transaction = conn.BeginTransaction();
+
+            using var dbTransaction =
+                (SqlTransaction)await conn.BeginTransactionAsync();
 
             try
             {
-                string getOrderDetailsQuery = "SELECT car_id, order_type FROM Orders WHERE order_id = @order_id;";
-                int carId = 0;
-                OrderType orderType;
+                const string getOrderQuery = @"
+            SELECT order_status
+            FROM Orders WITH (UPDLOCK, ROWLOCK)
+            WHERE order_id = @order_id;";
 
-                using (var cmdGet = new SqlCommand(getOrderDetailsQuery, conn, transaction))
+                OrderStatus currentStatus;
+
+                using (var cmd = new SqlCommand(
+                    getOrderQuery,
+                    conn,
+                    dbTransaction))
                 {
-                    cmdGet.Parameters.AddWithValue("@order_id", dto.OrderId);
-                    using var reader = await cmdGet.ExecuteReaderAsync();
-                    if (!await reader.ReadAsync())
+                    cmd.Parameters.AddWithValue(
+                        "@order_id",
+                        dto.OrderId);
+
+                    var result = await cmd.ExecuteScalarAsync();
+
+                    if (result == null || result == DBNull.Value)
                     {
+                        await dbTransaction.RollbackAsync();
                         return false;
                     }
-                    carId = reader.GetInt32(reader.GetOrdinal("car_id"));
-                    orderType = (OrderType)reader.GetInt32(reader.GetOrdinal("order_type"));
+
+                    currentStatus =
+                        (OrderStatus)Convert.ToInt32(result);
                 }
 
-                string updateOrderQuery = @"
+                if (!IsAllowedOrderStatusTransition(
+                    currentStatus,
+                    dto.Status))
+                {
+                    throw new InvalidOperationException(
+                        $"Changing order status from {currentStatus} " +
+                        $"to {dto.Status} is not allowed.");
+                }
+
+                if (dto.Status == OrderStatus.Canceled)
+                {
+                    const string checkPaymentQuery = @"
+                SELECT COUNT(1)
+                FROM Transactions
+                WHERE order_id = @order_id
+                  AND status = @completed_transaction_status
+                  AND is_deleted = 0;";
+
+                    using var paymentCommand = new SqlCommand(
+                        checkPaymentQuery,
+                        conn,
+                        dbTransaction);
+
+                    paymentCommand.Parameters.AddWithValue(
+                        "@order_id",
+                        dto.OrderId);
+
+                    paymentCommand.Parameters.AddWithValue(
+                        "@completed_transaction_status",
+                        (int)TransactionStatus.Completed);
+
+                    int completedTransactions =
+                        Convert.ToInt32(
+                            await paymentCommand.ExecuteScalarAsync());
+
+                    if (completedTransactions > 0)
+                    {
+                        throw new InvalidOperationException(
+                            "This order has a completed transaction. " +
+                            "Refund the transaction before canceling the order.");
+                    }
+                }
+
+                const string updateOrderQuery = @"
             UPDATE Orders
-            SET order_status = @order_status,
+            SET order_status = @new_status,
                 admin_notes = @admin_notes,
                 updated_at = GETDATE()
             WHERE order_id = @order_id;";
 
-                using (var cmdOrder = new SqlCommand(updateOrderQuery, conn, transaction))
-                {
-                    cmdOrder.Parameters.AddWithValue("@order_id", dto.OrderId);
-                    cmdOrder.Parameters.AddWithValue("@order_status", (int)dto.Status);
-                    cmdOrder.Parameters.AddWithValue("@admin_notes", (object?)dto.AdminNotes ?? DBNull.Value);
+                int affectedRows;
 
-                    int rowsAffected = await cmdOrder.ExecuteNonQueryAsync();
-                    if (rowsAffected == 0) return false;
+                using (var cmd = new SqlCommand(
+                    updateOrderQuery,
+                    conn,
+                    dbTransaction))
+                {
+                    cmd.Parameters.AddWithValue(
+                        "@new_status",
+                        (int)dto.Status);
+
+                    cmd.Parameters.AddWithValue(
+                        "@admin_notes",
+                        (object?)dto.AdminNotes ?? DBNull.Value);
+
+                    cmd.Parameters.AddWithValue(
+                        "@order_id",
+                        dto.OrderId);
+
+                    affectedRows = await cmd.ExecuteNonQueryAsync();
                 }
 
-                if (dto.Status == OrderStatus.Approved)
-                {
-                    CarStatus newCarStatus = orderType switch
-                    {
-                        OrderType.Buy => CarStatus.Sold,
-                        OrderType.Rent => CarStatus.Rented,
-                        OrderType.Installment => CarStatus.Sold,
-                        _ => CarStatus.Available
-                    };
+                await dbTransaction.CommitAsync();
 
-                    string updateCarQuery = "UPDATE Cars SET status = @car_status WHERE car_id = @car_id;";
-                    using (var cmdCar = new SqlCommand(updateCarQuery, conn, transaction))
-                    {
-                        cmdCar.Parameters.AddWithValue("@car_id", carId);
-                        cmdCar.Parameters.AddWithValue("@car_status", (int)newCarStatus);
-                        await cmdCar.ExecuteNonQueryAsync();
-                    }
-                }
-
-                await transaction.CommitAsync();
-                return true;
+                return affectedRows > 0;
             }
             catch
             {
-                await transaction.RollbackAsync();
+                await dbTransaction.RollbackAsync();
                 throw;
             }
         }
@@ -164,10 +215,21 @@ namespace CarShowRoom.DAL.Repositories
             await conn.OpenAsync();
 
             string queryOrder = @"
-        SELECT order_id, user_id, car_id, order_type, order_status, 
-               total_price, user_notes, admin_notes, created_at
-        FROM Orders 
-        WHERE order_id = @order_id;";
+            SELECT
+                o.order_id,
+                o.user_id,
+                c.user_id AS seller_id,
+                o.car_id,
+                o.order_type,
+                o.order_status,
+                o.total_price,
+                o.user_notes,
+                o.admin_notes,
+                o.created_at
+            FROM Orders o
+            INNER JOIN Cars c
+                ON c.car_id = o.car_id
+            WHERE o.order_id = @order_id;";
 
             OrderDetailsDto? order = null;
             int orderTypeInt = 0;
@@ -184,6 +246,7 @@ namespace CarShowRoom.DAL.Repositories
                     {
                         OrderId = reader.GetInt32(reader.GetOrdinal("order_id")),
                         UserId = reader.GetInt32(reader.GetOrdinal("user_id")),
+                        SellerId = reader.GetInt32(reader.GetOrdinal("seller_id")),
                         CarId = reader.GetInt32(reader.GetOrdinal("car_id")),
                         OrderType = (OrderType)orderTypeInt,
                         OrderStatus = (OrderStatus)reader.GetInt32(reader.GetOrdinal("order_status")),
@@ -227,10 +290,22 @@ namespace CarShowRoom.DAL.Repositories
             await conn.OpenAsync();
 
             string query = @"
-        SELECT order_id, car_id, order_type, order_status,user_notes, admin_notes, total_price, created_at
-        FROM Orders
-        WHERE user_id = @user_id
-        ORDER BY created_at DESC;";
+            SELECT
+                o.order_id,
+                o.user_id,
+                c.user_id AS seller_id,
+                o.car_id,
+                o.order_type,
+                o.order_status,
+                o.user_notes,
+                o.admin_notes,
+                o.total_price,
+                o.created_at
+            FROM Orders o
+            INNER JOIN Cars c
+                ON c.car_id = o.car_id
+            WHERE o.user_id = @user_id
+            ORDER BY o.created_at DESC;";
 
             using (var cmd = new SqlCommand(query, conn))
             {
@@ -244,6 +319,7 @@ namespace CarShowRoom.DAL.Repositories
                         OrderId = reader.GetInt32(reader.GetOrdinal("order_id")),
                         CarId = reader.GetInt32(reader.GetOrdinal("car_id")),
                         UserId=userId,
+                        SellerId = reader.GetInt32(reader.GetOrdinal("seller_id")),
                         OrderType = (OrderType)reader.GetInt32(reader.GetOrdinal("order_type")),
                         OrderStatus = (OrderStatus)reader.GetInt32(reader.GetOrdinal("order_status")),
                         UserNotes = reader.IsDBNull(reader.GetOrdinal("user_notes")) ? null : reader.GetString(reader.GetOrdinal("user_notes")),
@@ -280,22 +356,39 @@ namespace CarShowRoom.DAL.Repositories
             await conn.OpenAsync();
 
             var queryBuilder = new StringBuilder(@"
-       SELECT order_id, user_id, car_id, order_type, order_status, 
-               total_price, user_notes, admin_notes, created_at
-        FROM Orders
-        WHERE 1=1 ");
+            SELECT
+                o.order_id,
+                o.user_id,
+                c.user_id AS seller_id,
+                o.car_id,
+                o.order_type,
+                o.order_status,
+                o.total_price,
+                o.user_notes,
+                o.admin_notes,
+                o.created_at
+            FROM Orders o
+            INNER JOIN Cars c
+                ON c.car_id = o.car_id
+            WHERE 1 = 1 ");
 
             if (status.HasValue)
             {
-                queryBuilder.Append(" AND order_status = @status");
+                queryBuilder.Append(
+                    " AND o.order_status = @status"
+                );
             }
 
             if (type.HasValue)
             {
-                queryBuilder.Append(" AND order_type = @type");
+                queryBuilder.Append(
+                    " AND o.order_type = @type"
+                );
             }
 
-            queryBuilder.Append(" ORDER BY created_at DESC;");
+            queryBuilder.Append(
+                " ORDER BY o.created_at DESC;"
+            );
 
             using (var cmd = new SqlCommand(queryBuilder.ToString(), conn))
             {
@@ -314,6 +407,7 @@ namespace CarShowRoom.DAL.Repositories
                         
                             OrderId = reader.GetInt32(reader.GetOrdinal("order_id")),
                             UserId = reader.GetInt32(reader.GetOrdinal("user_id")),
+                            SellerId = reader.GetInt32(reader.GetOrdinal("seller_id")),
                             CarId = reader.GetInt32(reader.GetOrdinal("car_id")),
                             OrderType =(OrderType) reader.GetInt32(reader.GetOrdinal("order_type")),
                             OrderStatus = (OrderStatus)reader.GetInt32(reader.GetOrdinal("order_status")),
@@ -390,106 +484,23 @@ namespace CarShowRoom.DAL.Repositories
 
             return count == 0;
         }*/
-        public async Task<bool> IsCarAvailableAsync(int carId, OrderType orderType, DateTime? startDate = null, DateTime? endDate = null)
+        public async Task<bool> IsCarAvailableAsync(int carId,OrderType orderType,DateTime? startDate = null,DateTime? endDate = null)
         {
-            using var conn = new SqlConnection(_connectionString);
-            await conn.OpenAsync();
-
-            string checkSoldQuery = @"
-        SELECT COUNT(1)
-        FROM Orders
-        WHERE car_id = @car_id
-          AND order_status = @approved_status
-          AND order_type IN (@buy_type , @installment_type);";
-
-            using (var cmdSold = new SqlCommand(checkSoldQuery, conn))
+            try
             {
-                cmdSold.Parameters.AddWithValue("@car_id", carId);
-                cmdSold.Parameters.AddWithValue("@approved_status", (int)OrderStatus.Approved);
-                cmdSold.Parameters.AddWithValue("@buy_type", (int)OrderType.Buy);
-                cmdSold.Parameters.AddWithValue("@installment_type", (int)OrderType.Installment);
+                await ValidateCarAvailabilityAsync(
+                    carId,
+                    orderType,
+                    startDate,
+                    endDate
+                );
 
-                int soldCount = Convert.ToInt32(await cmdSold.ExecuteScalarAsync());
-                if (soldCount > 0)
-                {
-                    return false;
-                }
+                return true;
             }
-
-            if (orderType == OrderType.Rent)
+            catch (InvalidOperationException)
             {
-                if (!startDate.HasValue || !endDate.HasValue)
-                {
-                    throw new ArgumentException("Start date and End date are required when checking Rent availability.");
-                }
-
-                string checkRentOverlapQuery = @"
-            SELECT COUNT(1)
-            FROM Rent_Orders ro
-            INNER JOIN Orders o ON ro.order_id = o.order_id
-            WHERE o.car_id = @car_id
-              AND o.order_status IN (@completed_status, @approved_status)
-              AND ro.start_date < @end_date
-              AND ro.end_date > @start_date;";
-
-                using var cmdRent = new SqlCommand(checkRentOverlapQuery, conn);
-                cmdRent.Parameters.AddWithValue("@car_id", carId);
-                cmdRent.Parameters.AddWithValue("@completed_status", (int)OrderStatus.Completed);
-                cmdRent.Parameters.AddWithValue("@approved_status", (int)OrderStatus.Approved);
-                cmdRent.Parameters.AddWithValue("@start_date", startDate.Value);
-                cmdRent.Parameters.AddWithValue("@end_date", endDate.Value);
-
-                int overlapCount = Convert.ToInt32(await cmdRent.ExecuteScalarAsync());
-                if (overlapCount > 0)
-                {
-                    return false;
-                }
+                return false;
             }
-
-            if (orderType == OrderType.Buy)
-            {
-                string checkPendingBuyQuery = @"
-            SELECT COUNT(1)
-            FROM Orders
-            WHERE car_id = @car_id
-              AND order_type = @buy_type
-              AND order_status IN( @approved_status,@completed_status);";
-
-                using var cmdBuy = new SqlCommand(checkPendingBuyQuery, conn);
-                cmdBuy.Parameters.AddWithValue("@car_id", carId);
-                cmdBuy.Parameters.AddWithValue("@buy_type", (int)OrderType.Buy);
-                cmdBuy.Parameters.AddWithValue("@completed_status", (int)OrderStatus.Completed);
-                cmdBuy.Parameters.AddWithValue("@approved_status", (int)OrderStatus.Approved);
-
-                int pendingBuyCount = Convert.ToInt32(await cmdBuy.ExecuteScalarAsync());
-                if (pendingBuyCount > 0)
-                {
-                    return false;
-                }
-            }
-            if (orderType == OrderType.Installment)
-            {
-                string checkPendingInstallmentQuery = @"
-        SELECT COUNT(1)
-        FROM Orders
-        WHERE car_id = @car_id
-          AND order_type = @installment_type
-          AND order_status IN(@completed_status,@approved_status);";
-
-                using var cmdInstallment = new SqlCommand(checkPendingInstallmentQuery, conn);
-                cmdInstallment.Parameters.AddWithValue("@car_id", carId);
-                cmdInstallment.Parameters.AddWithValue("@installment_type", (int)OrderType.Installment);
-                cmdInstallment.Parameters.AddWithValue("@completed_status", (int)OrderStatus.Completed);
-                cmdInstallment.Parameters.AddWithValue("@approved_status", (int)OrderStatus.Approved);
-
-                int pendingInstallmentCount = Convert.ToInt32(await cmdInstallment.ExecuteScalarAsync());
-                if (pendingInstallmentCount > 0)
-                {
-                    return false;
-                }
-            }
-
-            return true;
         }
 
         //Buy Order Creation 
@@ -709,68 +720,273 @@ namespace CarShowRoom.DAL.Repositories
             }
             return null;
         }
-        public async Task ValidateCarAvailabilityAsync(int carId, OrderType orderType, DateTime? startDate = null, DateTime? endDate = null)
+        public async Task ValidateCarAvailabilityAsync(int carId,OrderType orderType,DateTime? startDate = null,DateTime? endDate = null)
         {
-            using var conn = new SqlConnection(_connectionString);
+            using var conn =
+                new SqlConnection(_connectionString);
+
             await conn.OpenAsync();
 
-            string checkCarQuery = "SELECT status FROM Cars WHERE car_id = @car_id;";
-            using (var cmdCar = new SqlCommand(checkCarQuery, conn))
+            const string carQuery = @"
+        SELECT
+            approval_status,
+            availability_status
+        FROM Cars
+        WHERE car_id = @car_id;";
+
+            CarApprovalStatus approvalStatus;
+            CarAvailabilityStatus availabilityStatus;
+
+            using (var cmd = new SqlCommand(
+                carQuery,
+                conn))
             {
-                cmdCar.Parameters.AddWithValue("@car_id", carId);
-                var result = await cmdCar.ExecuteScalarAsync();
+                cmd.Parameters.AddWithValue(
+                    "@car_id",
+                    carId
+                );
 
-                if (result == null || result == DBNull.Value)
+                using var reader =
+                    await cmd.ExecuteReaderAsync();
+
+                if (!await reader.ReadAsync())
                 {
-                    throw new InvalidOperationException("Car not found in the system.");
+                    throw new InvalidOperationException(
+                        "Car was not found."
+                    );
                 }
 
-                int carStatus = Convert.ToInt32(result);
+                approvalStatus =
+                    (CarApprovalStatus)
+                    reader.GetInt32(
+                        reader.GetOrdinal(
+                            "approval_status"
+                        )
+                    );
 
-                if (carStatus == (int)CarStatus.Sold)
-                {
-                    throw new InvalidOperationException("Car is already sold and unavailable for any new orders.");
-                }
+                availabilityStatus =
+                    (CarAvailabilityStatus)
+                    reader.GetInt32(
+                        reader.GetOrdinal(
+                            "availability_status"
+                        )
+                    );
+            }
 
-                if (carStatus == (int)CarStatus.Pending)
-                {
-                    throw new InvalidOperationException("Car listing is pending admin approval and cannot accept orders yet.");
-                }
+            if (approvalStatus !=
+                CarApprovalStatus.Approved)
+            {
+                throw new InvalidOperationException(
+                    "The car is not approved and cannot accept orders."
+                );
+            }
+
+            if (availabilityStatus ==
+                CarAvailabilityStatus.Sold)
+            {
+                throw new InvalidOperationException(
+                    "The car is already sold."
+                );
             }
 
             if (orderType == OrderType.Rent)
             {
-                if (!startDate.HasValue || !endDate.HasValue)
+                if (!startDate.HasValue ||
+                    !endDate.HasValue)
                 {
-                    throw new ArgumentException("Start date and End date are required for rent availability check.");
+                    throw new ArgumentException(
+                        "Start date and end date are required."
+                    );
                 }
 
-                if (startDate >= endDate || startDate < DateTime.UtcNow.Date)
+                if (startDate.Value.Date <
+                        DateTime.UtcNow.Date ||
+                    startDate.Value >= endDate.Value)
                 {
-                    throw new ArgumentException("Invalid date range specified.");
+                    throw new ArgumentException(
+                        "Invalid rental date range."
+                    );
                 }
 
-                string checkOverlapQuery = @"
+                const string overlapQuery = @"
             SELECT COUNT(1)
             FROM Rent_Orders ro
-            INNER JOIN Orders o ON ro.order_id = o.order_id
+            INNER JOIN Orders o
+                ON o.order_id = ro.order_id
             WHERE o.car_id = @car_id
-              AND o.order_status = @approved_status
+              AND o.order_status IN
+                  (
+                      @approved_status,
+                      @completed_status
+                  )
               AND ro.start_date < @end_date
               AND ro.end_date > @start_date;";
 
-                using var cmdRent = new SqlCommand(checkOverlapQuery, conn);
-                cmdRent.Parameters.AddWithValue("@car_id", carId);
-                cmdRent.Parameters.AddWithValue("@approved_status", (int)OrderStatus.Approved);
-                cmdRent.Parameters.AddWithValue("@start_date", startDate.Value);
-                cmdRent.Parameters.AddWithValue("@end_date", endDate.Value);
+                using var cmd = new SqlCommand(
+                    overlapQuery,
+                    conn
+                );
 
-                int overlapCount = Convert.ToInt32(await cmdRent.ExecuteScalarAsync());
+                cmd.Parameters.AddWithValue(
+                    "@car_id",
+                    carId
+                );
+
+                cmd.Parameters.AddWithValue(
+                    "@approved_status",
+                    (int)OrderStatus.Approved
+                );
+
+                cmd.Parameters.AddWithValue(
+                    "@completed_status",
+                    (int)OrderStatus.Completed
+                );
+
+                cmd.Parameters.AddWithValue(
+                    "@start_date",
+                    startDate.Value
+                );
+
+                cmd.Parameters.AddWithValue(
+                    "@end_date",
+                    endDate.Value
+                );
+
+                int overlapCount =
+                    Convert.ToInt32(
+                        await cmd.ExecuteScalarAsync()
+                    );
+
                 if (overlapCount > 0)
                 {
-                    throw new InvalidOperationException("Car is already rented for the selected date range.");
+                    throw new InvalidOperationException(
+                        "The car is already rented during the selected period."
+                    );
                 }
             }
+
+            if (orderType == OrderType.Buy ||
+                orderType == OrderType.Installment)
+            {
+                const string saleQuery = @"
+            SELECT COUNT(1)
+            FROM Orders
+            WHERE car_id = @car_id
+              AND order_type IN
+                  (
+                      @buy_type,
+                      @installment_type
+                  )
+              AND order_status IN
+                  (
+                      @approved_status,
+                      @completed_status
+                  );";
+
+                using (var cmd = new SqlCommand(
+                    saleQuery,
+                    conn))
+                {
+                    cmd.Parameters.AddWithValue(
+                        "@car_id",
+                        carId
+                    );
+
+                    cmd.Parameters.AddWithValue(
+                        "@buy_type",
+                        (int)OrderType.Buy
+                    );
+
+                    cmd.Parameters.AddWithValue(
+                        "@installment_type",
+                        (int)OrderType.Installment
+                    );
+
+                    cmd.Parameters.AddWithValue(
+                        "@approved_status",
+                        (int)OrderStatus.Approved
+                    );
+
+                    cmd.Parameters.AddWithValue(
+                        "@completed_status",
+                        (int)OrderStatus.Completed
+                    );
+
+                    int saleCount =
+                        Convert.ToInt32(
+                            await cmd.ExecuteScalarAsync()
+                        );
+
+                    if (saleCount > 0)
+                    {
+                        throw new InvalidOperationException(
+                            "The car already has an approved purchase order."
+                        );
+                    }
+                }
+
+                const string futureRentQuery = @"
+            SELECT COUNT(1)
+            FROM Rent_Orders ro
+            INNER JOIN Orders o
+                ON o.order_id = ro.order_id
+            WHERE o.car_id = @car_id
+              AND o.order_status IN
+                  (
+                      @approved_status,
+                      @completed_status
+                  )
+              AND ro.end_date > GETUTCDATE();";
+
+                using var rentCmd = new SqlCommand(
+                    futureRentQuery,
+                    conn
+                );
+
+                rentCmd.Parameters.AddWithValue(
+                    "@car_id",
+                    carId
+                );
+
+                rentCmd.Parameters.AddWithValue(
+                    "@approved_status",
+                    (int)OrderStatus.Approved
+                );
+
+                rentCmd.Parameters.AddWithValue(
+                    "@completed_status",
+                    (int)OrderStatus.Completed
+                );
+
+                int futureRentCount =
+                    Convert.ToInt32(
+                        await rentCmd.ExecuteScalarAsync()
+                    );
+
+                if (futureRentCount > 0)
+                {
+                    throw new InvalidOperationException(
+                        "The car has an active or future rental."
+                    );
+                }
+            }
+        }
+        private static bool IsAllowedOrderStatusTransition(
+    OrderStatus currentStatus,
+    OrderStatus newStatus)
+        {
+            return currentStatus switch
+            {
+                OrderStatus.Pending =>
+                    newStatus == OrderStatus.Approved ||
+                    newStatus == OrderStatus.Rejected ||
+                    newStatus == OrderStatus.Canceled,
+
+                OrderStatus.Approved =>
+                    newStatus == OrderStatus.Canceled,
+
+                _ => false
+            };
         }
     }
 }

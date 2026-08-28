@@ -4,6 +4,7 @@ public class OrderDetailsDto
 {
     public int OrderId { get; set; }
     public int UserId { get; set; }
+    public int SellerId { get; set; }
     public int CarId { get; set; }
     public OrderType OrderType { get; set; }
     public OrderStatus OrderStatus { get; set; }

@@ -22,9 +22,11 @@ namespace CarShowRoomApp.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetApprovedCars()
+        public async Task<IActionResult> GetPublicCars()
         {
-            var cars = await _carRepo.GetAllApprovedCarsAsync();
+            var cars =
+                await _carRepo.GetPublicCarsAsync();
+
             return Ok(cars);
         }
 
@@ -81,12 +83,12 @@ namespace CarShowRoomApp.Controllers
             }
         }
 
-        [HttpGet("pending-cars")]
+/*        [HttpGet("pending-cars")]
         public async Task<IActionResult> GetPending()
         {
             var cars = await _carRepo.GetPendingCarsAsync();
             return Ok(cars);
-        }
+        }*/
 
         [Authorize]
         [HttpDelete("{id}")]
@@ -125,7 +127,8 @@ namespace CarShowRoomApp.Controllers
         public async Task<IActionResult> UpdateCar(int id, [FromForm] CarCreateDto car)
         {
             var currentUserId = int.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value!);
-            
+            bool isAdmin = User.IsInRole("Admin");
+
             int UserId = currentUserId;
             try
             {
@@ -154,7 +157,13 @@ namespace CarShowRoomApp.Controllers
                         }
                     }
 
-                    return Ok(new { Message = "Car information updated successfully and is pending re-approval." });
+                    return Ok(new
+                    {
+                        Message = isAdmin? "Car information updated and approved automatically."
+                        : "Car information updated successfully and is pending re-approval.",
+
+                        IsApproved = isAdmin
+                    });
                 }
                 else
                 {
@@ -188,51 +197,98 @@ namespace CarShowRoomApp.Controllers
 
         [Authorize]
         [HttpGet("my-cars")]
-        public async Task<IActionResult> GetMyCars()
+        public async Task<IActionResult> GetMyCars([FromQuery]CarApprovalStatus? approvalStatus,[FromQuery]CarAvailabilityStatus? availabilityStatus)
         {
-            try
+            var userIdClaim = User.FindFirst(
+                System.Security.Claims
+                    .ClaimTypes.NameIdentifier
+            );
+
+            if (userIdClaim == null ||
+                !int.TryParse(
+                    userIdClaim.Value,
+                    out int userId))
             {
-                var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-
-                if (userIdClaim == null)
+                return Unauthorized(new
                 {
-                    return Unauthorized(new { Message = "User identity not found in token." });
-                }
-
-                int userId = int.Parse(userIdClaim.Value);
-
-                var myCars = await _carRepo.GetUserCarsAsync(userId);
-
-                if (myCars == null || myCars.Count == 0)
-                {
-                    return Ok(new { Message = "You haven't added any cars yet.", Data = new List<Car>() });
-                }
-
-                return Ok(myCars);
+                    message =
+                        "User identity was not found."
+                });
             }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { Message = "An error occurred while fetching your cars.", Detail = ex.Message });
-            }
+
+            var cars =
+                await _carRepo.GetCarsForUserAsync(
+                    userId,
+                    approvalStatus,
+                    availabilityStatus
+                );
+
+            return Ok(cars);
         }
 
-        [HttpGet("{id}")]
+        [HttpGet("{id:int}")]
         public async Task<IActionResult> GetCarById(int id)
         {
             try
             {
-                var car = await _carRepo.GetCarInfoOnlyByIdAsync(id);
+                var car =
+                    await _carRepo.GetCarByIdAsync(id);
 
                 if (car == null)
                 {
-                    return NotFound(new { Message = $"Car with ID {id} was not found." });
+                    return NotFound(new
+                    {
+                        message = "Car was not found."
+                    });
+                }
+
+                bool isPublicCar =
+                    car.ApprovalStatus ==
+                        CarApprovalStatus.Approved &&
+                    car.AvailabilityStatus ==
+                        CarAvailabilityStatus.Available;
+
+                int currentUserId = 0;
+
+                string? userIdValue =
+                    User.FindFirst(
+                        System.Security.Claims
+                            .ClaimTypes.NameIdentifier
+                    )?.Value;
+
+                int.TryParse(
+                    userIdValue,
+                    out currentUserId
+                );
+
+                bool isOwner =
+                    currentUserId > 0 &&
+                    car.UserId == currentUserId;
+
+                bool isAdmin =
+                    User.Identity?.IsAuthenticated == true &&
+                    User.IsInRole("Admin");
+
+                if (!isPublicCar &&
+                    !isOwner &&
+                    !isAdmin)
+                {
+                    return NotFound(new
+                    {
+                        message = "Car was not found."
+                    });
                 }
 
                 return Ok(car);
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { Message = "An error occurred while retrieving the car data.", Details = ex.Message });
+                return StatusCode(500, new
+                {
+                    message =
+                        "An error occurred while retrieving the car.",
+                    details = ex.Message
+                });
             }
         }
 
@@ -249,6 +305,8 @@ namespace CarShowRoomApp.Controllers
                 return StatusCode(500, new { Message = "An error occurred while fetching car images.", Details = ex.Message });
             }
         }
+
+
 
     }
 }

@@ -96,19 +96,45 @@ namespace CarShowRoom.API.Controllers
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> ReviewOrder([FromBody] OrderReviewDto dto)
         {
-            if (dto.Status != OrderStatus.Approved && dto.Status != OrderStatus.Rejected && dto.Status != OrderStatus.Completed)
+            if (dto.Status != OrderStatus.Approved &&
+                dto.Status != OrderStatus.Rejected &&
+                dto.Status != OrderStatus.Canceled)
             {
-                return BadRequest(new { message = "Status must be either Approved (2), Rejected (3), or Completed (4)." });
+                return BadRequest(new
+                {
+                    message =
+                        "Status must be Approved, Rejected, or Canceled. " +
+                        "Completed is set automatically when a transaction is completed."
+                });
             }
 
-            bool isUpdated = await _orderRepo.ReviewOrderAsync(dto);
-
-            if (!isUpdated)
+            try
             {
-                return NotFound(new { message = "Order not found or has already been reviewed." });
-            }
+                bool isUpdated =
+                    await _orderRepo.ReviewOrderAsync(dto);
 
-            return Ok(new { message = $"Order status updated successfully to {dto.Status}." });
+                if (!isUpdated)
+                {
+                    return BadRequest(new
+                    {
+                        message =
+                            "Order was not found or is no longer pending."
+                    });
+                }
+
+                return Ok(new
+                {
+                    message =
+                        $"Order status updated to {dto.Status}."
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new
+                {
+                    message = ex.Message
+                });
+            }
         }
         
         [HttpGet("{id}")]
@@ -169,27 +195,39 @@ namespace CarShowRoom.API.Controllers
             return Ok(new { message = "Order has been canceled successfully." });
         }
 
-        [HttpGet("{carId}/check-availability")]
-        public async Task<IActionResult> CheckAvailability( int carId,[FromQuery] OrderType orderType,[FromQuery] DateTime? startDate,[FromQuery] DateTime? endDate)
+        [HttpGet("{carId:int}/check-availability")]
+        public async Task<IActionResult> CheckAvailability(
+            int carId,
+            [FromQuery] OrderType orderType,
+            [FromQuery] DateTime? startDate,
+            [FromQuery] DateTime? endDate)
         {
-            if (orderType == OrderType.Rent)
+            try
             {
-                if (!startDate.HasValue || !endDate.HasValue || startDate >= endDate || startDate < DateTime.UtcNow.Date)
+                bool isAvailable =
+                    await _orderRepo.IsCarAvailableAsync(
+                        carId,
+                        orderType,
+                        startDate,
+                        endDate
+                    );
+
+                return Ok(new
                 {
-                    return BadRequest(new { message = "Invalid or missing date range for rent order." });
-                }
+                    carId,
+                    orderType,
+                    startDate,
+                    endDate,
+                    isAvailable
+                });
             }
-
-            bool isAvailable = await _orderRepo.IsCarAvailableAsync(carId, orderType, startDate, endDate);
-
-            return Ok(new
+            catch (ArgumentException ex)
             {
-                carId,
-                orderType,
-                startDate,
-                endDate,
-                isAvailable
-            });
+                return BadRequest(new
+                {
+                    message = ex.Message
+                });
+            }
         }
 
         [HttpPost("buy")]

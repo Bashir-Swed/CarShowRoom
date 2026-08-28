@@ -1,9 +1,10 @@
-﻿using CarShowRoom.DAL.Models;
+﻿using CarShowRoom.DAL.DTOs;
+using CarShowRoom.DAL.Models;
 using CarShowRoom.DAL.Models.CarShowRoom.DAL.Models.CarShowRoom.DAL.Models;
 using Microsoft.Data.SqlClient;
-using CarShowRoom.DAL.DTOs;
 using Microsoft.Extensions.Configuration;
 using System.Data;
+using System.Text;
 
 namespace CarShowRoom.DAL.Repositories
 {
@@ -15,43 +16,135 @@ namespace CarShowRoom.DAL.Repositories
         {
             _connectionString = configuration.GetConnectionString("DefaultConnection")!;
         }
-
-        public async Task<List<Car>> GetAllApprovedCarsAsync()
+        public async Task<List<Car>> GetPublicCarsAsync()
         {
-            var cars = new List<Car>();
-            using var conn = new SqlConnection(_connectionString);
+            return await QueryCarsAsync(
+                @"
+        AND c.approval_status = @approved
+        AND c.effective_availability_status = @availability_status",
+                cmd =>
+                {
+                    cmd.Parameters.AddWithValue(
+                        "@approved",
+                        (int)CarApprovalStatus.Approved
+                    );
 
-            string sql = @"SELECT c.*, b.name AS brand_name,b.brand_logo_url ,ci.image_url 
-                   FROM Cars c 
-                   JOIN Brands b ON c.brand_id = b.brand_id
-                   LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
-                   WHERE c.is_approved = 1 and c.status = 2";
+                    cmd.Parameters.AddWithValue(
+                        "@available",
+                        (int)CarAvailabilityStatus.Available
+                    );
+                }
+            );
+        }
+        public async Task<List<Car>> GetCarsForUserAsync(int userId,CarApprovalStatus? approvalStatus,CarAvailabilityStatus? availabilityStatus)
+        {
+            var where = new StringBuilder(@"
+        AND c.user_id = @user_id");
 
-            using var cmd = new SqlCommand(sql, conn);
-            await conn.OpenAsync();
-            using var reader = await cmd.ExecuteReaderAsync();
-
-            while (await reader.ReadAsync())
+            if (approvalStatus.HasValue)
             {
-                int carId = (int)reader["car_id"];
-
-                var existingCar = cars.FirstOrDefault(x => x.CarId == carId);
-
-                if (existingCar == null)
-                {
-                    var car = MapToCar(reader);
-                    if (reader["image_url"] != DBNull.Value)
-                        car.ImageUrls.Add(reader["image_url"].ToString()!);
-
-                    cars.Add(car);
-                }
-                else
-                {
-                    if (reader["image_url"] != DBNull.Value)
-                        existingCar.ImageUrls.Add(reader["image_url"].ToString()!);
-                }
+                where.Append(@"
+            AND c.approval_status =
+                @approval_status");
             }
-            return cars;
+
+            if (availabilityStatus.HasValue)
+            {
+                where.Append(@"
+            AND c.effective_availability_status = @availability_status");
+            }
+
+            return await QueryCarsAsync(
+                where.ToString(),
+                cmd =>
+                {
+                    cmd.Parameters.AddWithValue(
+                        "@user_id",
+                        userId
+                    );
+
+                    if (approvalStatus.HasValue)
+                    {
+                        cmd.Parameters.AddWithValue(
+                            "@approval_status",
+                            (int)approvalStatus.Value
+                        );
+                    }
+
+                    if (availabilityStatus.HasValue)
+                    {
+                        cmd.Parameters.AddWithValue(
+                            "@availability_status",
+                            (int)availabilityStatus.Value
+                        );
+                    }
+                }
+            );
+        }
+        public async Task<List<Car>> GetCarsForAdminAsync(CarApprovalStatus? approvalStatus,CarAvailabilityStatus? availabilityStatus,int? ownerId)
+        {
+            var where = new StringBuilder();
+
+            if (approvalStatus.HasValue)
+            {
+                where.Append(@"
+            AND c.approval_status =
+                @approval_status");
+            }
+
+            if (availabilityStatus.HasValue)
+            {
+                where.Append(@"
+            AND c.effective_availability_status = @availability_status");
+            }
+
+            if (ownerId.HasValue)
+            {
+                where.Append(@"
+            AND c.user_id = @owner_id");
+            }
+
+            return await QueryCarsAsync(
+                where.ToString(),
+                cmd =>
+                {
+                    if (approvalStatus.HasValue)
+                    {
+                        cmd.Parameters.AddWithValue(
+                            "@approval_status",
+                            (int)approvalStatus.Value
+                        );
+                    }
+
+                    if (availabilityStatus.HasValue)
+                    {
+                        cmd.Parameters.AddWithValue(
+                            "@availability_status",
+                            (int)availabilityStatus.Value
+                        );
+                    }
+
+                    if (ownerId.HasValue)
+                    {
+                        cmd.Parameters.AddWithValue(
+                            "@owner_id",
+                            ownerId.Value
+                        );
+                    }
+                }
+            );
+        }
+        public async Task<Car?> GetCarByIdAsync(int carId)
+        {
+            var cars = await QueryCarsAsync(
+                "AND c.car_id = @car_id",
+                cmd => cmd.Parameters.AddWithValue(
+                    "@car_id",
+                    carId
+                )
+            );
+
+            return cars.FirstOrDefault();
         }
 
         public Car MapToCar(SqlDataReader reader)
@@ -67,9 +160,9 @@ namespace CarShowRoom.DAL.Repositories
                 FuelType = reader["fuel_type"]?.ToString(),
                 GearType = reader["gear_type"]?.ToString(),
                 Mileage = (int)reader["mileage"],
-                IsApproved = (bool)reader["is_approved"],
                 RentPricePerDay = reader["rent_price_per_day"] as decimal?,
-                Status = (CarStatus)(int)reader["status"],
+                ApprovalStatus =(CarApprovalStatus)Convert.ToInt32(reader["approval_status"]),
+                AvailabilityStatus =(CarAvailabilityStatus)Convert.ToInt32(reader["effective_availability_status"]),
                 CreatedAt = (DateTime)reader["created_at"],
                 ApprovedBy = reader["approved_by"] != DBNull.Value ? (int?)reader["approved_by"] : null,
                 ApprovalNotes = reader.GetSchemaTable().Select("ColumnName = 'approval_notes'").Length > 0 && reader["approval_notes"] != DBNull.Value
@@ -96,7 +189,7 @@ namespace CarShowRoom.DAL.Repositories
             using var cmd = new SqlCommand("sp_AddCarWithImages", conn);
             cmd.CommandType = CommandType.StoredProcedure;
 
-            string imagesCombined = string.Join(",", car.ImageUrls);
+            string imagesCombined = string.Join(",",car.ImageUrls ?? new List<string>());
 
             cmd.Parameters.AddWithValue("@user_id", UserId);
             cmd.Parameters.AddWithValue("@BrandId", car.BrandId);
@@ -109,7 +202,6 @@ namespace CarShowRoom.DAL.Repositories
             cmd.Parameters.AddWithValue("@mileage", car.Mileage);
             cmd.Parameters.AddWithValue("@rent_price_per_day", (object?)car.RentPricePerDay ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@description", (object?)car.Description ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@status",(int)CarStatus.Pending);
             cmd.Parameters.AddWithValue("@image_urls", imagesCombined);
 
             cmd.Parameters.AddWithValue("@cylinders", (object?)car.Cylinders ?? DBNull.Value);
@@ -129,53 +221,38 @@ namespace CarShowRoom.DAL.Repositories
             return 0;
         }
 
-        public async Task<string> ApproveCarAsync(int carId, int employeeId, string notes)
+        public async Task<string> ApproveCarAsync(int carId,int adminId,string notes)
         {
-            using var conn = new SqlConnection(_connectionString);
-            using var cmd = new SqlCommand("sp_ApproveCar", conn);
+            using var conn =
+                new SqlConnection(_connectionString);
+
+            using var cmd =
+                new SqlCommand("sp_ApproveCar", conn);
+
             cmd.CommandType = CommandType.StoredProcedure;
 
-            cmd.Parameters.AddWithValue("@car_id", carId);
-            cmd.Parameters.AddWithValue("@approved_by_admin_id", employeeId);
+            cmd.Parameters.AddWithValue(
+                "@car_id",
+                carId
+            );
+
+            cmd.Parameters.AddWithValue(
+                "@approved_by_admin_id",
+                adminId
+            );
+
+            cmd.Parameters.AddWithValue(
+                "@notes",
+                string.IsNullOrWhiteSpace(notes)
+                    ? DBNull.Value
+                    : notes.Trim()
+            );
 
             await conn.OpenAsync();
+
             var result = await cmd.ExecuteScalarAsync();
+
             return result?.ToString() ?? "Error";
-        }
-        public async Task<List<Car>> GetPendingCarsAsync()
-        {
-            var cars = new List<Car>();
-            using var conn = new SqlConnection(_connectionString);
-
-            string sql = @"SELECT c.*, b.name AS brand_name,b.brand_logo_url ,ci.image_url 
-                   FROM Cars c 
-                   JOIN Brands b ON c.brand_id = b.brand_id
-                   LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
-                   WHERE c.is_approved=0 and c.status = 1";
-
-            using var cmd = new SqlCommand(sql, conn);
-            await conn.OpenAsync();
-            using var reader = await cmd.ExecuteReaderAsync();
-
-            while (await reader.ReadAsync())
-            {
-                int carId = (int)reader["car_id"];
-                var existingCar = cars.FirstOrDefault(x => x.CarId == carId);
-
-                if (existingCar == null)
-                {
-                    var car = MapToCar(reader);
-                    if (reader["image_url"] != DBNull.Value)
-                        car.ImageUrls.Add(reader["image_url"].ToString()!);
-                    cars.Add(car);
-                }
-                else
-                {
-                    if (reader["image_url"] != DBNull.Value)
-                        existingCar.ImageUrls.Add(reader["image_url"].ToString()!);
-                }
-            }
-            return cars;
         }
 
         public async Task<bool> DeleteCarAsync(int carId, int requestedByUserId)
@@ -204,7 +281,7 @@ namespace CarShowRoom.DAL.Repositories
             using var conn = new SqlConnection(_connectionString);
             using var cmd = new SqlCommand("sp_UpdateCar", conn);
             cmd.CommandType = CommandType.StoredProcedure;
-            string imagesCombined = string.Join(",", car.ImageUrls);
+            string imagesCombined = string.Join(",",car.ImageUrls ?? new List<string>());
 
             cmd.Parameters.AddWithValue("@car_id", CarId);
             cmd.Parameters.AddWithValue("@user_id", UserId);
@@ -219,6 +296,13 @@ namespace CarShowRoom.DAL.Repositories
             cmd.Parameters.AddWithValue("@mileage", car.Mileage);
             cmd.Parameters.AddWithValue("@description", (object?)car.Description ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@rent_price_per_day", (object?)car.RentPricePerDay ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@cylinders",(object?)car.Cylinders ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@interior_color",(object?)car.InteriorColor ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@keys_count",(object?)car.KeysCount ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@drive_type",(object?)car.DriveType ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@region",(object?)car.Region ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@horsepower",(object?)car.Horsepower ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@top_speed",(object?)car.TopSpeed ?? DBNull.Value);
 
             await conn.OpenAsync();
             try
@@ -303,50 +387,6 @@ namespace CarShowRoom.DAL.Repositories
             return cars;
         }
 
-        public async Task<List<Car>> GetUserCarsAsync(int userId)
-        {
-            var cars = new List<Car>();
-            using var conn = new SqlConnection(_connectionString);
-
-            string sql = @"SELECT c.*, b.name AS brand_name,b.brand_logo_url ,ci.image_url 
-                   FROM Cars c 
-                   JOIN Brands b ON c.brand_id = b.brand_id
-                   LEFT JOIN Car_Images ci ON c.car_id = ci.car_id 
-                   WHERE c.user_id = @userId
-                   ORDER BY c.created_at DESC";
-
-            using var cmd = new SqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@userId", userId);
-
-            await conn.OpenAsync();
-            using var reader = await cmd.ExecuteReaderAsync();
-
-            while (await reader.ReadAsync())
-            {
-                int carId = (int)reader["car_id"];
-
-                var existingCar = cars.FirstOrDefault(x => x.CarId == carId);
-
-                if (existingCar == null)
-                {
-                    var car = MapToCar(reader);
-
-                    if (reader["image_url"] != DBNull.Value)
-                    {
-                        car.ImageUrls.Add(reader["image_url"].ToString()!);
-                    }
-                    cars.Add(car);
-                }
-                else
-                {
-                    if (reader["image_url"] != DBNull.Value)
-                    {
-                        existingCar.ImageUrls.Add(reader["image_url"].ToString()!);
-                    }
-                }
-            }
-            return cars;
-        }
 
         public async Task<List<string>> GetCarImagesAsync(int carId)
         {
@@ -369,26 +409,87 @@ namespace CarShowRoom.DAL.Repositories
             return imageUrls;
         }
 
-        public async Task<Car?> GetCarInfoOnlyByIdAsync(int carId)
+        public async Task<string> RejectCarAsync( int carId,int adminId,string notes)
         {
-            string query = "SELECT * FROM Cars WHERE car_id = @car_id;";
-
             using var conn = new SqlConnection(_connectionString);
-            using var cmd = new SqlCommand(query, conn);
+            using var cmd = new SqlCommand("sp_RejectCar", conn);
 
-            cmd.CommandType = CommandType.Text;
+            cmd.CommandType = CommandType.StoredProcedure;
             cmd.Parameters.AddWithValue("@car_id", carId);
+            cmd.Parameters.AddWithValue("@rejected_by_admin_id", adminId);
+            cmd.Parameters.AddWithValue("@notes", notes);
 
             await conn.OpenAsync();
-            using var reader = await cmd.ExecuteReaderAsync();
 
-            if (await reader.ReadAsync())
+            var result = await cmd.ExecuteScalarAsync();
+            return result?.ToString() ?? "Error";
+        }
+        private async Task<List<Car>> QueryCarsAsync(string additionalWhere,Action<SqlCommand>? configureCommand = null)
+        {
+            var cars = new Dictionary<int, Car>();
+
+            const string baseQuery = @"
+        SELECT
+            c.*,
+            b.name AS brand_name,
+            b.brand_logo_url,
+            ci.image_url
+        FROM dbo.vw_CarsWithEffectiveAvailability c
+        LEFT JOIN Brands b
+            ON b.brand_id = c.brand_id
+        LEFT JOIN Car_Images ci
+            ON ci.car_id = c.car_id
+        WHERE 1 = 1 ";
+
+            string query =
+                baseQuery +
+                Environment.NewLine +
+                additionalWhere +
+                Environment.NewLine +
+                @"
+        ORDER BY
+            c.created_at DESC,
+            ci.uploaded_at ASC;";
+
+            using var conn =
+                new SqlConnection(_connectionString);
+
+            using var cmd =
+                new SqlCommand(query, conn);
+
+            configureCommand?.Invoke(cmd);
+
+            await conn.OpenAsync();
+
+            using var reader =
+                await cmd.ExecuteReaderAsync();
+
+            while (await reader.ReadAsync())
             {
-                var car = MapToCar(reader);
-                return car;
+                int carId = reader.GetInt32(
+                    reader.GetOrdinal("car_id")
+                );
+
+                if (!cars.TryGetValue(carId, out var car))
+                {
+                    car = MapToCar(reader);
+                    cars.Add(carId, car);
+                }
+
+                if (reader["image_url"] != DBNull.Value)
+                {
+                    string? imageUrl =
+                        reader["image_url"].ToString();
+
+                    if (!string.IsNullOrWhiteSpace(imageUrl) &&
+                        !car.ImageUrls.Contains(imageUrl))
+                    {
+                        car.ImageUrls.Add(imageUrl);
+                    }
+                }
             }
 
-            return null;
+            return cars.Values.ToList();
         }
 
     }

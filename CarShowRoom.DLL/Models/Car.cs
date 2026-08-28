@@ -16,10 +16,10 @@
                 public string? FuelType { get; set; }    
                 public string? GearType { get; set; }    
                 public int Mileage { get; set; }         
-                public string? Description { get; set; } 
-                public bool IsApproved { get; set; }     
+                public string? Description { get; set; }     
                 public decimal? RentPricePerDay { get; set; } 
-                public CarStatus Status { get; set; } = CarStatus.Pending;
+                public CarApprovalStatus ApprovalStatus{get;set;} = CarApprovalStatus.Pending;
+                public CarAvailabilityStatus AvailabilityStatus{get;set;} = CarAvailabilityStatus.Available;
                 public DateTime CreatedAt { get; set; }  
                 public int? ApprovedBy { get; set; }    
                 public string? ApprovalNotes { get; set; } 

@@ -12,42 +12,91 @@ namespace CarShowRoomApp.Services
             _environment = environment;
         }
 
-        public async Task<string> SaveImageAsync(IFormFile imageFile, string folderName)
+        public async Task<string> SaveImageAsync(IFormFile imageFile,string folderName)
         {
             if (imageFile == null || imageFile.Length == 0)
+            {
                 return string.Empty;
+            }
 
-            var uploadsFolder = Path.Combine(_environment.WebRootPath, "images", folderName);
+            string uploadsFolder = Path.Combine(
+                _environment.WebRootPath,
+                "images",
+                folderName
+            );
 
             if (!Directory.Exists(uploadsFolder))
             {
                 Directory.CreateDirectory(uploadsFolder);
             }
 
-            var uniqueFileName = Guid.NewGuid().ToString() + "_" + imageFile.FileName;
-            var filePath = Path.Combine(uploadsFolder, uniqueFileName);
+            string safeOriginalFileName =
+                Path.GetFileName(imageFile.FileName);
 
-            using (var fileStream = new FileStream(filePath, FileMode.Create))
-            {
-                await imageFile.CopyToAsync(fileStream);
-            }
+            string uniqueFileName =
+                $"{Guid.NewGuid():N}_{safeOriginalFileName}";
+
+            string filePath = Path.Combine(
+                uploadsFolder,
+                uniqueFileName
+            );
+
+            await using var fileStream =
+                new FileStream(
+                    filePath,
+                    FileMode.CreateNew
+                );
+
+            await imageFile.CopyToAsync(fileStream);
 
             return $"/images/{folderName}/{uniqueFileName}";
         }
 
 
         public void DeleteImage(string imagePath)
+        {
+            if (string.IsNullOrWhiteSpace(imagePath))
             {
-                if (string.IsNullOrEmpty(imagePath)) return;
+                return;
+            }
 
-                var normalizedPath = imagePath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
+            string webRoot =
+                Path.GetFullPath(
+                    _environment.WebRootPath
+                );
 
-                var physicalPath = Path.Combine(_environment.WebRootPath, normalizedPath);
+            string normalizedPath =
+                imagePath
+                    .TrimStart('/')
+                    .Replace(
+                        '/',
+                        Path.DirectorySeparatorChar
+                    );
 
-                if (File.Exists(physicalPath))
-                {
-                    File.Delete(physicalPath);
-                }
+            string physicalPath =
+                Path.GetFullPath(
+                    Path.Combine(
+                        webRoot,
+                        normalizedPath
+                    )
+                );
+
+            string allowedPrefix =
+                webRoot.TrimEnd(
+                    Path.DirectorySeparatorChar
+                ) + Path.DirectorySeparatorChar;
+
+            if (!physicalPath.StartsWith(
+                allowedPrefix,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (File.Exists(physicalPath))
+            {
+                File.Delete(physicalPath);
+            }
         }
     }
 }
