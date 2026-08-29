@@ -30,7 +30,7 @@ namespace CarShowRoom.DAL.Repositories
                     );
 
                     cmd.Parameters.AddWithValue(
-                        "@available",
+                        "@availability_status",
                         (int)CarAvailabilityStatus.Available
                     );
                 }
