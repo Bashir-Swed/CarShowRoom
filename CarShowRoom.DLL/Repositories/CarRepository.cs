@@ -157,6 +157,8 @@ namespace CarShowRoom.DAL.Repositories
                 Model = reader["model"].ToString()!,
                 Year = (int)reader["year"],
                 Price = (decimal)reader["price"],
+                Color = reader["color"] != DBNull.Value? reader["color"].ToString(): null,
+                Description = reader["description"] != DBNull.Value? reader["description"].ToString(): null,
                 FuelType = reader["fuel_type"]?.ToString(),
                 GearType = reader["gear_type"]?.ToString(),
                 Mileage = (int)reader["mileage"],
