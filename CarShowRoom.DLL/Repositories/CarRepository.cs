@@ -350,45 +350,95 @@ namespace CarShowRoom.DAL.Repositories
             }
         }
 
+        /*        public async Task<List<Car>> SearchCarsAsync(int? brandId, string? model, decimal? minPrice, decimal? maxPrice, int? year, string? fuelType, string? gearType)
+                {
+                    var cars = new List<Car>();
+                    using var conn = new SqlConnection(_connectionString);
+                    using var cmd = new SqlCommand("sp_SearchCars", conn);
+                    cmd.CommandType = CommandType.StoredProcedure;
+
+                    cmd.Parameters.AddWithValue("@brandId", (object?)brandId ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@model", (object?)model ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@minPrice", (object?)minPrice ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@maxPrice", (object?)maxPrice ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@year", (object?)year ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@fuelType", (object?)fuelType ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@gearType", (object?)gearType ?? DBNull.Value);
+
+                    await conn.OpenAsync();
+                    using var reader = await cmd.ExecuteReaderAsync();
+
+                    while (await reader.ReadAsync())
+                    {
+                        int carId = (int)reader["car_id"];
+                        var existingCar = cars.FirstOrDefault(x => x.CarId == carId);
+
+                        if (existingCar == null)
+                        {
+                            var car = MapToCar(reader);
+                            if (reader["image_url"] != DBNull.Value)
+                                car.ImageUrls.Add(reader["image_url"].ToString()!);
+                            cars.Add(car);
+                        }
+                        else
+                        {
+                            if (reader["image_url"] != DBNull.Value)
+                                existingCar.ImageUrls.Add(reader["image_url"].ToString()!);
+                        }
+                    }
+                    return cars;
+                }*/
         public async Task<List<Car>> SearchCarsAsync(int? brandId, string? model, decimal? minPrice, decimal? maxPrice, int? year, string? fuelType, string? gearType)
         {
-            var cars = new List<Car>();
-            using var conn = new SqlConnection(_connectionString);
-            using var cmd = new SqlCommand("sp_SearchCars", conn);
-            cmd.CommandType = CommandType.StoredProcedure;
+            var whereBuilder = new StringBuilder();
 
-            cmd.Parameters.AddWithValue("@brandId", (object?)brandId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@model", (object?)model ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@minPrice", (object?)minPrice ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@maxPrice", (object?)maxPrice ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@year", (object?)year ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@fuelType", (object?)fuelType ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@gearType", (object?)gearType ?? DBNull.Value);
+            whereBuilder.Append(" AND c.approval_status = 2 AND c.effective_availability_status = 1");
 
-            await conn.OpenAsync();
-            using var reader = await cmd.ExecuteReaderAsync();
+            if (brandId.HasValue)
+                whereBuilder.Append(" AND c.brand_id = @brandId");
 
-            while (await reader.ReadAsync())
+            if (!string.IsNullOrWhiteSpace(model))
+                whereBuilder.Append(" AND c.model LIKE '%' + @model + '%'");
+
+            if (minPrice.HasValue)
+                whereBuilder.Append(" AND c.price >= @minPrice");
+
+            if (maxPrice.HasValue)
+                whereBuilder.Append(" AND c.price <= @maxPrice");
+
+            if (year.HasValue)
+                whereBuilder.Append(" AND c.year = @year");
+
+            if (!string.IsNullOrWhiteSpace(fuelType))
+                whereBuilder.Append(" AND c.fuel_type = @fuelType");
+
+            if (!string.IsNullOrWhiteSpace(gearType))
+                whereBuilder.Append(" AND c.gear_type = @gearType");
+
+            return await QueryCarsAsync(whereBuilder.ToString(), cmd =>
             {
-                int carId = (int)reader["car_id"];
-                var existingCar = cars.FirstOrDefault(x => x.CarId == carId);
+                if (brandId.HasValue)
+                    cmd.Parameters.AddWithValue("@brandId", brandId.Value);
 
-                if (existingCar == null)
-                {
-                    var car = MapToCar(reader);
-                    if (reader["image_url"] != DBNull.Value)
-                        car.ImageUrls.Add(reader["image_url"].ToString()!);
-                    cars.Add(car);
-                }
-                else
-                {
-                    if (reader["image_url"] != DBNull.Value)
-                        existingCar.ImageUrls.Add(reader["image_url"].ToString()!);
-                }
-            }
-            return cars;
+                if (!string.IsNullOrWhiteSpace(model))
+                    cmd.Parameters.AddWithValue("@model", model);
+
+                if (minPrice.HasValue)
+                    cmd.Parameters.AddWithValue("@minPrice", minPrice.Value);
+
+                if (maxPrice.HasValue)
+                    cmd.Parameters.AddWithValue("@maxPrice", maxPrice.Value);
+
+                if (year.HasValue)
+                    cmd.Parameters.AddWithValue("@year", year.Value);
+
+                if (!string.IsNullOrWhiteSpace(fuelType))
+                    cmd.Parameters.AddWithValue("@fuelType", fuelType);
+
+                if (!string.IsNullOrWhiteSpace(gearType))
+                    cmd.Parameters.AddWithValue("@gearType", gearType);
+            });
         }
-
 
         public async Task<List<string>> GetCarImagesAsync(int carId)
         {
@@ -426,7 +476,7 @@ namespace CarShowRoom.DAL.Repositories
             var result = await cmd.ExecuteScalarAsync();
             return result?.ToString() ?? "Error";
         }
-        private async Task<List<Car>> QueryCarsAsync(string additionalWhere,Action<SqlCommand>? configureCommand = null)
+        public async Task<List<Car>> QueryCarsAsync(string additionalWhere,Action<SqlCommand>? configureCommand = null)
         {
             var cars = new Dictionary<int, Car>();
 

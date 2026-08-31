@@ -1,12 +1,7 @@
 ﻿using CarShowRoom.DAL.Models.CarShowRoom.DAL.Models.CarShowRoom.DAL.Models;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
-using System;
-using System.Collections.Generic;
 using System.Data;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace CarShowRoom.DAL.Repositories
 {
@@ -34,7 +29,7 @@ namespace CarShowRoom.DAL.Repositories
             return result?.ToString() ?? "Error";
         }
 
-        public async Task<List<Car>> GetUserFavoritesAsync(int userId)
+        /*public async Task<List<Car>> GetUserFavoritesAsync(int userId)
         {
             var cars = new List<Car>();
             using var conn = new SqlConnection(_connectionString);
@@ -70,6 +65,20 @@ namespace CarShowRoom.DAL.Repositories
                 }
             }
             return cars;
+        }*/
+        public async Task<List<Car>> GetUserFavoritesAsync(int userId)
+        {
+            string additionalWhere = @"
+        AND c.car_id IN (
+            SELECT car_id 
+            FROM Favorites 
+            WHERE user_id = @userId
+        )";
+
+            return await _carRepo.QueryCarsAsync(additionalWhere, cmd =>
+            {
+                cmd.Parameters.AddWithValue("@userId", userId);
+            });
         }
     }
 }
