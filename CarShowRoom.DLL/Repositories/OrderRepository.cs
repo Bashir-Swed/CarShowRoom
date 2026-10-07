@@ -1,0 +1,992 @@
+﻿using CarShowRoom.DAL.Enums;
+using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Configuration;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace CarShowRoom.DAL.Repositories
+{
+    public class OrderRepository
+    {
+        private readonly string _connectionString;
+
+        public OrderRepository(IConfiguration configuration)
+        {
+            _connectionString = configuration.GetConnectionString("DefaultConnection")!;
+        }
+        //Rent Order Creation with Document Uploads
+        public async Task<Int32> AddRentOrderAsync(RentOrderCreateDto dto, int userId, List<string> documentUrls)
+        {
+            await ValidateCarAvailabilityAsync(dto.CarId, OrderType.Rent, dto.StartDate, dto.EndDate);
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            using var transaction = conn.BeginTransaction();
+
+            try
+            {
+                string getPriceQuery = "SELECT rent_price_per_day FROM Cars WHERE car_id = @car_id";
+                using var cmdPrice = new SqlCommand(getPriceQuery, conn, transaction);
+                cmdPrice.Parameters.AddWithValue("@car_id", dto.CarId);
+
+                var priceResult = await cmdPrice.ExecuteScalarAsync();
+                if (priceResult == null|| priceResult == DBNull.Value)
+                    throw new Exception("Car not found or rental price per day is not set for this car.");
+
+                decimal rentPricePerDay = Convert.ToDecimal(priceResult);
+                int totalDays = (dto.EndDate - dto.StartDate).Days;
+
+                if (totalDays <= 0)
+                    throw new Exception("End date must be after start date.");
+
+                decimal totalPrice = rentPricePerDay * totalDays;
+
+                string insertOrderQuery = @"
+            INSERT INTO Orders (user_id, car_id, order_type, order_status, total_price, user_notes, created_at)
+            OUTPUT INSERTED.order_id
+            VALUES (@user_id, @car_id, 1, 1, @total_price, @user_notes, GETDATE());";
+                // order_type = 1 (Rent) | order_status = 1 (Pending)
+
+                using var cmdOrder = new SqlCommand(insertOrderQuery, conn, transaction);
+                cmdOrder.Parameters.AddWithValue("@user_id", userId);
+                cmdOrder.Parameters.AddWithValue("@car_id", dto.CarId);
+                cmdOrder.Parameters.AddWithValue("@total_price", totalPrice);
+                cmdOrder.Parameters.AddWithValue("@user_notes", (object?)dto.UserNotes ?? DBNull.Value);
+
+                int newOrderId = (int)await cmdOrder.ExecuteScalarAsync();
+
+                string insertRentQuery = @"
+            INSERT INTO Rent_Orders (order_id, start_date, end_date)
+            VALUES (@order_id, @start_date, @end_date);";
+
+                using var cmdRent = new SqlCommand(insertRentQuery, conn, transaction);
+                cmdRent.Parameters.AddWithValue("@order_id", newOrderId);
+                cmdRent.Parameters.AddWithValue("@start_date", dto.StartDate);
+                cmdRent.Parameters.AddWithValue("@end_date", dto.EndDate);
+                await cmdRent.ExecuteNonQueryAsync();
+
+                if (documentUrls != null && documentUrls.Count > 0)
+                {
+                    string insertDocsQuery = "INSERT INTO Order_Documents (order_id, document_url) VALUES (@order_id, @url);";
+                    foreach (var url in documentUrls)
+                    {
+                        using var cmdDoc = new SqlCommand(insertDocsQuery, conn, transaction);
+                        cmdDoc.Parameters.AddWithValue("@order_id", newOrderId);
+                        cmdDoc.Parameters.AddWithValue("@url", url);
+                        await cmdDoc.ExecuteNonQueryAsync();
+                    }
+                }
+
+                transaction.Commit();
+                return newOrderId;
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+        public async Task<bool> ReviewOrderAsync(OrderReviewDto dto)
+        {
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            using var dbTransaction =
+                (SqlTransaction)await conn.BeginTransactionAsync();
+
+            try
+            {
+                const string getOrderQuery = @"
+            SELECT order_status
+            FROM Orders WITH (UPDLOCK, ROWLOCK)
+            WHERE order_id = @order_id;";
+
+                OrderStatus currentStatus;
+
+                using (var cmd = new SqlCommand(
+                    getOrderQuery,
+                    conn,
+                    dbTransaction))
+                {
+                    cmd.Parameters.AddWithValue(
+                        "@order_id",
+                        dto.OrderId);
+
+                    var result = await cmd.ExecuteScalarAsync();
+
+                    if (result == null || result == DBNull.Value)
+                    {
+                        await dbTransaction.RollbackAsync();
+                        return false;
+                    }
+
+                    currentStatus =
+                        (OrderStatus)Convert.ToInt32(result);
+                }
+
+                if (!IsAllowedOrderStatusTransition(
+                    currentStatus,
+                    dto.Status))
+                {
+                    throw new InvalidOperationException(
+                        $"Changing order status from {currentStatus} " +
+                        $"to {dto.Status} is not allowed.");
+                }
+
+                if (dto.Status == OrderStatus.Canceled)
+                {
+                    const string checkPaymentQuery = @"
+                SELECT COUNT(1)
+                FROM Transactions
+                WHERE order_id = @order_id
+                  AND status = @completed_transaction_status
+                  AND is_deleted = 0;";
+
+                    using var paymentCommand = new SqlCommand(
+                        checkPaymentQuery,
+                        conn,
+                        dbTransaction);
+
+                    paymentCommand.Parameters.AddWithValue(
+                        "@order_id",
+                        dto.OrderId);
+
+                    paymentCommand.Parameters.AddWithValue(
+                        "@completed_transaction_status",
+                        (int)TransactionStatus.Completed);
+
+                    int completedTransactions =
+                        Convert.ToInt32(
+                            await paymentCommand.ExecuteScalarAsync());
+
+                    if (completedTransactions > 0)
+                    {
+                        throw new InvalidOperationException(
+                            "This order has a completed transaction. " +
+                            "Refund the transaction before canceling the order.");
+                    }
+                }
+
+                const string updateOrderQuery = @"
+            UPDATE Orders
+            SET order_status = @new_status,
+                admin_notes = @admin_notes,
+                updated_at = GETDATE()
+            WHERE order_id = @order_id;";
+
+                int affectedRows;
+
+                using (var cmd = new SqlCommand(
+                    updateOrderQuery,
+                    conn,
+                    dbTransaction))
+                {
+                    cmd.Parameters.AddWithValue(
+                        "@new_status",
+                        (int)dto.Status);
+
+                    cmd.Parameters.AddWithValue(
+                        "@admin_notes",
+                        (object?)dto.AdminNotes ?? DBNull.Value);
+
+                    cmd.Parameters.AddWithValue(
+                        "@order_id",
+                        dto.OrderId);
+
+                    affectedRows = await cmd.ExecuteNonQueryAsync();
+                }
+
+                await dbTransaction.CommitAsync();
+
+                return affectedRows > 0;
+            }
+            catch
+            {
+                await dbTransaction.RollbackAsync();
+                throw;
+            }
+        }
+        public async Task<OrderDetailsDto?> GetOrderDetailsAsync(int orderId)
+        {
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            string queryOrder = @"
+            SELECT
+                o.order_id,
+                o.user_id,
+                c.user_id AS seller_id,
+                o.car_id,
+                o.order_type,
+                o.order_status,
+                o.total_price,
+                o.user_notes,
+                o.admin_notes,
+                o.created_at
+            FROM Orders o
+            INNER JOIN Cars c
+                ON c.car_id = o.car_id
+            WHERE o.order_id = @order_id;";
+
+            OrderDetailsDto? order = null;
+            int orderTypeInt = 0;
+
+            using (var cmd = new SqlCommand(queryOrder, conn))
+            {
+                cmd.Parameters.AddWithValue("@order_id", orderId);
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                if (await reader.ReadAsync())
+                {
+                    orderTypeInt = reader.GetInt32(reader.GetOrdinal("order_type"));
+                    order = new OrderDetailsDto
+                    {
+                        OrderId = reader.GetInt32(reader.GetOrdinal("order_id")),
+                        UserId = reader.GetInt32(reader.GetOrdinal("user_id")),
+                        SellerId = reader.GetInt32(reader.GetOrdinal("seller_id")),
+                        CarId = reader.GetInt32(reader.GetOrdinal("car_id")),
+                        OrderType = (OrderType)orderTypeInt,
+                        OrderStatus = (OrderStatus)reader.GetInt32(reader.GetOrdinal("order_status")),
+                        TotalPrice = reader.GetDecimal(reader.GetOrdinal("total_price")),
+                        UserNotes = reader.IsDBNull(reader.GetOrdinal("user_notes")) ? null : reader.GetString(reader.GetOrdinal("user_notes")),
+                        AdminNotes = reader.IsDBNull(reader.GetOrdinal("admin_notes")) ? null : reader.GetString(reader.GetOrdinal("admin_notes")),
+                        CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at"))
+                    };
+                }
+            }
+
+            if (order == null) return null;
+
+            switch (order.OrderType)        
+            {                
+                case OrderType.Rent:           
+                    order.RentDetails = await FetchRentSpecificDetailsAsync(conn, orderId);
+                    break;
+                case OrderType.Installment:
+                    order.InstallmentDetails = await FetchInstallmentSummaryDetailsAsync(conn, order.OrderId);
+                    break;
+
+                // future cases:
+                // case OrderType.Buy:
+                //     order.BuyDetails = await FetchBuySpecificDetailsAsync(conn, orderId);
+                //     break;
+
+                default:
+                    // no extra details for other types
+                    break;
+            }
+
+            order.DocumentUrls = await FetchOrderDocumentsAsync(conn, orderId);
+            return order;
+        }
+        public async Task<List<OrderDetailsDto>> GetOrdersByUserIdAsync(int userId)
+        {
+            var orders = new List<OrderDetailsDto>();
+
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            string query = @"
+            SELECT
+                o.order_id,
+                o.user_id,
+                c.user_id AS seller_id,
+                o.car_id,
+                o.order_type,
+                o.order_status,
+                o.user_notes,
+                o.admin_notes,
+                o.total_price,
+                o.created_at
+            FROM Orders o
+            INNER JOIN Cars c
+                ON c.car_id = o.car_id
+            WHERE o.user_id = @user_id
+            ORDER BY o.created_at DESC;";
+
+            using (var cmd = new SqlCommand(query, conn))
+            {
+                cmd.Parameters.AddWithValue("@user_id", userId);
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    orders.Add(new OrderDetailsDto
+                    {
+                        OrderId = reader.GetInt32(reader.GetOrdinal("order_id")),
+                        CarId = reader.GetInt32(reader.GetOrdinal("car_id")),
+                        UserId=userId,
+                        SellerId = reader.GetInt32(reader.GetOrdinal("seller_id")),
+                        OrderType = (OrderType)reader.GetInt32(reader.GetOrdinal("order_type")),
+                        OrderStatus = (OrderStatus)reader.GetInt32(reader.GetOrdinal("order_status")),
+                        UserNotes = reader.IsDBNull(reader.GetOrdinal("user_notes")) ? null : reader.GetString(reader.GetOrdinal("user_notes")),
+                        AdminNotes = reader.IsDBNull(reader.GetOrdinal("admin_notes")) ? null : reader.GetString(reader.GetOrdinal("admin_notes")),
+                        TotalPrice = reader.GetDecimal(reader.GetOrdinal("total_price")),
+                        CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at"))
+                    });
+                }
+            }
+
+            foreach (var order in orders)
+            {
+                switch (order.OrderType)
+                {
+                    case OrderType.Rent:
+                        order.RentDetails = await FetchRentSpecificDetailsAsync(conn, order.OrderId);
+                        break;
+                    case OrderType.Installment:
+                        order.InstallmentDetails = await FetchInstallmentSummaryDetailsAsync(conn, order.OrderId);
+                        break;
+                        // case OrderType.Buy:
+                        //     order.BuyDetails = await FetchBuySpecificDetailsAsync(conn, order.OrderId);
+                        //     break;
+                }
+            }
+
+            return orders;
+        }
+        public async Task<List<OrderDetailsDto>> GetOrdersForAdminAsync(OrderStatus? status, OrderType? type)
+        {
+            var orders = new List<OrderDetailsDto>();
+
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            var queryBuilder = new StringBuilder(@"
+            SELECT
+                o.order_id,
+                o.user_id,
+                c.user_id AS seller_id,
+                o.car_id,
+                o.order_type,
+                o.order_status,
+                o.total_price,
+                o.user_notes,
+                o.admin_notes,
+                o.created_at
+            FROM Orders o
+            INNER JOIN Cars c
+                ON c.car_id = o.car_id
+            WHERE 1 = 1 ");
+
+            if (status.HasValue)
+            {
+                queryBuilder.Append(
+                    " AND o.order_status = @status"
+                );
+            }
+
+            if (type.HasValue)
+            {
+                queryBuilder.Append(
+                    " AND o.order_type = @type"
+                );
+            }
+
+            queryBuilder.Append(
+                " ORDER BY o.created_at DESC;"
+            );
+
+            using (var cmd = new SqlCommand(queryBuilder.ToString(), conn))
+            {
+                if (status.HasValue)
+                    cmd.Parameters.AddWithValue("@status", (int)status.Value);
+
+                if (type.HasValue)
+                    cmd.Parameters.AddWithValue("@type", (int)type.Value);
+
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        orders.Add(new OrderDetailsDto
+                        {
+                        
+                            OrderId = reader.GetInt32(reader.GetOrdinal("order_id")),
+                            UserId = reader.GetInt32(reader.GetOrdinal("user_id")),
+                            SellerId = reader.GetInt32(reader.GetOrdinal("seller_id")),
+                            CarId = reader.GetInt32(reader.GetOrdinal("car_id")),
+                            OrderType =(OrderType) reader.GetInt32(reader.GetOrdinal("order_type")),
+                            OrderStatus = (OrderStatus)reader.GetInt32(reader.GetOrdinal("order_status")),
+                            TotalPrice = reader.GetDecimal(reader.GetOrdinal("total_price")),
+                            UserNotes = reader.IsDBNull(reader.GetOrdinal("user_notes")) ? null : reader.GetString(reader.GetOrdinal("user_notes")),
+                            AdminNotes = reader.IsDBNull(reader.GetOrdinal("admin_notes")) ? null : reader.GetString(reader.GetOrdinal("admin_notes")),
+                            CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at"))
+                        });
+                    }
+                }
+            }
+            foreach (var order in orders)
+            {
+                switch (order.OrderType)
+                {
+                    case OrderType.Rent:
+                        order.RentDetails = await FetchRentSpecificDetailsAsync(conn, order.OrderId);
+                        break;
+                    case OrderType.Installment:
+                        order.InstallmentDetails = await FetchInstallmentSummaryDetailsAsync(conn, order.OrderId);
+                        break;
+                        // case OrderType.Buy:
+                        //     order.BuyDetails = await FetchBuySummaryDetailsAsync(conn, order.OrderId);
+                        //     break;
+                }
+            }
+
+            return orders;
+        }
+        public async Task<bool> CancelOrderAsync(int orderId, int userId)
+        {
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            string query = @"
+        UPDATE Orders
+        SET order_status = @canceled_status,
+            updated_at = GETDATE()
+        WHERE order_id = @order_id 
+          AND user_id = @user_id 
+          AND order_status = @pending_status;";
+
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@order_id", orderId);
+            cmd.Parameters.AddWithValue("@user_id", userId);
+            cmd.Parameters.AddWithValue("@canceled_status", (int)OrderStatus.Canceled);
+            cmd.Parameters.AddWithValue("@pending_status", (int)OrderStatus.Pending);
+
+            int rowsAffected = await cmd.ExecuteNonQueryAsync();
+            return rowsAffected > 0;
+        }
+        /*public async Task<bool> IsCarAvailableAsync(int carId, DateTime startDate, DateTime endDate)
+        {
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            string query = @"
+        SELECT COUNT(1)
+        FROM Rent_Orders ro
+        INNER JOIN Orders o ON ro.order_id = o.order_id
+        WHERE o.car_id = @car_id
+          AND o.order_status IN (@pending, @approved)
+          AND ro.start_date < @end_date
+          AND ro.end_date > @start_date;";
+
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@car_id", carId);
+            cmd.Parameters.AddWithValue("@pending", (int)OrderStatus.Pending);
+            cmd.Parameters.AddWithValue("@approved", (int)OrderStatus.Approved);
+            cmd.Parameters.AddWithValue("@start_date", startDate);
+            cmd.Parameters.AddWithValue("@end_date", endDate);
+
+            int count = Convert.ToInt32(await cmd.ExecuteScalarAsync());
+
+            return count == 0;
+        }*/
+        public async Task<bool> IsCarAvailableAsync(int carId,OrderType orderType,DateTime? startDate = null,DateTime? endDate = null)
+        {
+            try
+            {
+                await ValidateCarAvailabilityAsync(
+                    carId,
+                    orderType,
+                    startDate,
+                    endDate
+                );
+
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        //Buy Order Creation 
+        public async Task<int> AddBuyOrderAsync(BuyOrderCreateDto dto, int userId, List<string> documentUrls)
+        {
+            await ValidateCarAvailabilityAsync(dto.CarId, OrderType.Buy);
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+            using var transaction = conn.BeginTransaction();
+
+            try
+            {
+                string getPriceQuery = "SELECT price FROM Cars WHERE car_id = @car_id;";
+                decimal carPrice = 0;
+
+                using (var cmdPrice = new SqlCommand(getPriceQuery, conn, transaction))
+                {
+                    cmdPrice.Parameters.AddWithValue("@car_id", dto.CarId);
+                    var result = await cmdPrice.ExecuteScalarAsync();
+
+                    if (result == null || result == DBNull.Value)
+                    {
+                        throw new InvalidOperationException("Car not found or price is invalid.");
+                    }
+
+                    carPrice = Convert.ToDecimal(result);
+                }
+
+                string insertBaseOrder = @"
+            INSERT INTO Orders (car_id, user_id, order_type, order_status,user_notes, total_price, created_at)
+            OUTPUT INSERTED.order_id
+            VALUES (@car_id, @user_id, @order_type, @order_status, @user_notes, @total_price, GETDATE());";
+
+                int orderId;
+                using (var cmd = new SqlCommand(insertBaseOrder, conn, transaction))
+                {
+                    cmd.Parameters.AddWithValue("@car_id", dto.CarId);
+                    cmd.Parameters.AddWithValue("@user_id", userId);
+                    cmd.Parameters.AddWithValue("@order_type", (int)OrderType.Buy);
+                    cmd.Parameters.AddWithValue("@order_status", (int)OrderStatus.Pending);
+                    cmd.Parameters.AddWithValue("@total_price", carPrice);
+                    cmd.Parameters.AddWithValue("@user_notes", (object?)dto.UserNotes ?? DBNull.Value);
+
+                    orderId = (int)await cmd.ExecuteScalarAsync();
+                }
+
+                string insertBuyOrder = @"
+            INSERT INTO Buy_Orders (order_id)
+            VALUES (@order_id);";
+
+                using (var cmd = new SqlCommand(insertBuyOrder, conn, transaction))
+                {
+                    cmd.Parameters.AddWithValue("@order_id", orderId);
+
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                if (documentUrls != null && documentUrls.Any())
+                {
+                    string insertDocQuery = @"
+                INSERT INTO Order_Documents (order_id, document_url)
+                VALUES (@order_id, @document_url);";
+
+                    foreach (var url in documentUrls)
+                    {
+                        using var cmdDoc = new SqlCommand(insertDocQuery, conn, transaction);
+                        cmdDoc.Parameters.AddWithValue("@order_id", orderId);
+                        cmdDoc.Parameters.AddWithValue("@document_url", url);
+                        await cmdDoc.ExecuteNonQueryAsync();
+                    }
+                }
+
+                await transaction.CommitAsync();
+                return orderId;
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        }
+
+        // Installment Order
+        public async Task<int> AddInstallmentOrderAsync(InstallmentOrderCreateDto dto, int userId, List<string> documentUrls)
+        {
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+            using var transaction = conn.BeginTransaction();
+
+            try
+            {
+                await ValidateCarAvailabilityAsync(dto.CarId, OrderType.Installment);
+
+                string getPriceQuery = "SELECT price FROM Cars WHERE car_id = @car_id;";
+                decimal carPrice = 0;
+
+                using (var cmdPrice = new SqlCommand(getPriceQuery, conn, transaction))
+                {
+                    cmdPrice.Parameters.AddWithValue("@car_id", dto.CarId);
+                    var result = await cmdPrice.ExecuteScalarAsync();
+
+                    if (result == null || result == DBNull.Value)
+                    {
+                        throw new InvalidOperationException("Car not found or price is invalid.");
+                    }
+
+                    carPrice = Convert.ToDecimal(result);
+                }
+
+                if (dto.InstallmentMonths <= 0)
+                {
+                    throw new ArgumentException("Installment months must be greater than zero.");
+                }
+
+                decimal monthlyPayment = Math.Round(carPrice / dto.InstallmentMonths, 2);
+
+                string insertBaseOrder = @"
+            INSERT INTO Orders (car_id, user_id, order_type, order_status, total_price, created_at)
+            OUTPUT INSERTED.order_id
+            VALUES (@car_id, @user_id, @order_type, @order_status, @total_price, GETDATE());";
+
+                int orderId;
+                using (var cmd = new SqlCommand(insertBaseOrder, conn, transaction))
+                {
+                    cmd.Parameters.AddWithValue("@car_id", dto.CarId);
+                    cmd.Parameters.AddWithValue("@user_id", userId);
+                    cmd.Parameters.AddWithValue("@order_type", (int)OrderType.Installment);
+                    cmd.Parameters.AddWithValue("@order_status", (int)OrderStatus.Pending);
+                    cmd.Parameters.AddWithValue("@total_price", carPrice);
+
+                    orderId = (int)await cmd.ExecuteScalarAsync();
+                }
+
+                string insertInstallmentOrder = @"
+            INSERT INTO Installment_Orders (order_id, installment_months, monthly_payment)
+            VALUES (@order_id, @installment_months, @monthly_payment);";
+
+                using (var cmd = new SqlCommand(insertInstallmentOrder, conn, transaction))
+                {
+                    cmd.Parameters.AddWithValue("@order_id", orderId);
+                    cmd.Parameters.AddWithValue("@installment_months", dto.InstallmentMonths);
+                    cmd.Parameters.AddWithValue("@monthly_payment", monthlyPayment);
+
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                if (documentUrls != null && documentUrls.Any())
+                {
+                    string insertDocQuery = @"
+                INSERT INTO Order_Documents (order_id, document_url)
+                VALUES (@order_id, @document_url);";
+
+                    foreach (var url in documentUrls)
+                    {
+                        using var cmdDoc = new SqlCommand(insertDocQuery, conn, transaction);
+                        cmdDoc.Parameters.AddWithValue("@order_id", orderId);
+                        cmdDoc.Parameters.AddWithValue("@document_url", url);
+                        await cmdDoc.ExecuteNonQueryAsync();
+                    }
+                }
+
+                await transaction.CommitAsync();
+                return orderId;
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        }
+
+        private async Task<RentOrderDetailsDto?> FetchRentSpecificDetailsAsync(SqlConnection conn, int orderId)
+        {
+            string query = "SELECT start_date, end_date FROM Rent_Orders WHERE order_id = @order_id;";
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@order_id", orderId);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                return new RentOrderDetailsDto
+                {
+                    StartDate = reader.GetDateTime(reader.GetOrdinal("start_date")),
+                    EndDate = reader.GetDateTime(reader.GetOrdinal("end_date"))
+                };
+            }
+            return null;
+        }
+        private async Task<List<string>> FetchOrderDocumentsAsync(SqlConnection conn, int orderId)
+        {
+            var docs = new List<string>();
+            string query = "SELECT document_url FROM Order_Documents WHERE order_id = @order_id;";
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@order_id", orderId);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                docs.Add(reader.GetString(0));
+            }
+            return docs;
+        }
+        private async Task<InstallmentOrderSummaryDto?> FetchInstallmentSummaryDetailsAsync(SqlConnection conn, int orderId)
+        {
+            string query = "SELECT installment_months, monthly_payment FROM Installment_Orders WHERE order_id = @order_id;";
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@order_id", orderId);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                return new InstallmentOrderSummaryDto
+                {
+                    InstallmentMonths = reader.GetInt32(reader.GetOrdinal("installment_months")),
+                    MonthlyPayment = reader.GetDecimal(reader.GetOrdinal("monthly_payment"))
+                };
+            }
+            return null;
+        }
+        public async Task ValidateCarAvailabilityAsync(int carId,OrderType orderType,DateTime? startDate = null,DateTime? endDate = null)
+        {
+            using var conn =
+                new SqlConnection(_connectionString);
+
+            await conn.OpenAsync();
+
+            const string carQuery = @"
+        SELECT
+            approval_status,
+            availability_status
+        FROM Cars
+        WHERE car_id = @car_id;";
+
+            CarApprovalStatus approvalStatus;
+            CarAvailabilityStatus availabilityStatus;
+
+            using (var cmd = new SqlCommand(
+                carQuery,
+                conn))
+            {
+                cmd.Parameters.AddWithValue(
+                    "@car_id",
+                    carId
+                );
+
+                using var reader =
+                    await cmd.ExecuteReaderAsync();
+
+                if (!await reader.ReadAsync())
+                {
+                    throw new InvalidOperationException(
+                        "Car was not found."
+                    );
+                }
+
+                approvalStatus =
+                    (CarApprovalStatus)
+                    reader.GetInt32(
+                        reader.GetOrdinal(
+                            "approval_status"
+                        )
+                    );
+
+                availabilityStatus =
+                    (CarAvailabilityStatus)
+                    reader.GetInt32(
+                        reader.GetOrdinal(
+                            "availability_status"
+                        )
+                    );
+            }
+
+            if (approvalStatus !=
+                CarApprovalStatus.Approved)
+            {
+                throw new InvalidOperationException(
+                    "The car is not approved and cannot accept orders."
+                );
+            }
+
+            if (availabilityStatus ==
+                CarAvailabilityStatus.Sold)
+            {
+                throw new InvalidOperationException(
+                    "The car is already sold."
+                );
+            }
+
+            if (orderType == OrderType.Rent)
+            {
+                if (!startDate.HasValue ||
+                    !endDate.HasValue)
+                {
+                    throw new ArgumentException(
+                        "Start date and end date are required."
+                    );
+                }
+
+                if (startDate.Value.Date <
+                        DateTime.UtcNow.Date ||
+                    startDate.Value >= endDate.Value)
+                {
+                    throw new ArgumentException(
+                        "Invalid rental date range."
+                    );
+                }
+
+                const string overlapQuery = @"
+            SELECT COUNT(1)
+            FROM Rent_Orders ro
+            INNER JOIN Orders o
+                ON o.order_id = ro.order_id
+            WHERE o.car_id = @car_id
+              AND o.order_status IN
+                  (
+                      @approved_status,
+                      @completed_status
+                  )
+              AND ro.start_date < @end_date
+              AND ro.end_date > @start_date;";
+
+                using var cmd = new SqlCommand(
+                    overlapQuery,
+                    conn
+                );
+
+                cmd.Parameters.AddWithValue(
+                    "@car_id",
+                    carId
+                );
+
+                cmd.Parameters.AddWithValue(
+                    "@approved_status",
+                    (int)OrderStatus.Approved
+                );
+
+                cmd.Parameters.AddWithValue(
+                    "@completed_status",
+                    (int)OrderStatus.Completed
+                );
+
+                cmd.Parameters.AddWithValue(
+                    "@start_date",
+                    startDate.Value
+                );
+
+                cmd.Parameters.AddWithValue(
+                    "@end_date",
+                    endDate.Value
+                );
+
+                int overlapCount =
+                    Convert.ToInt32(
+                        await cmd.ExecuteScalarAsync()
+                    );
+
+                if (overlapCount > 0)
+                {
+                    throw new InvalidOperationException(
+                        "The car is already rented during the selected period."
+                    );
+                }
+            }
+
+            if (orderType == OrderType.Buy ||
+                orderType == OrderType.Installment)
+            {
+                const string saleQuery = @"
+            SELECT COUNT(1)
+            FROM Orders
+            WHERE car_id = @car_id
+              AND order_type IN
+                  (
+                      @buy_type,
+                      @installment_type
+                  )
+              AND order_status IN
+                  (
+                      @approved_status,
+                      @completed_status
+                  );";
+
+                using (var cmd = new SqlCommand(
+                    saleQuery,
+                    conn))
+                {
+                    cmd.Parameters.AddWithValue(
+                        "@car_id",
+                        carId
+                    );
+
+                    cmd.Parameters.AddWithValue(
+                        "@buy_type",
+                        (int)OrderType.Buy
+                    );
+
+                    cmd.Parameters.AddWithValue(
+                        "@installment_type",
+                        (int)OrderType.Installment
+                    );
+
+                    cmd.Parameters.AddWithValue(
+                        "@approved_status",
+                        (int)OrderStatus.Approved
+                    );
+
+                    cmd.Parameters.AddWithValue(
+                        "@completed_status",
+                        (int)OrderStatus.Completed
+                    );
+
+                    int saleCount =
+                        Convert.ToInt32(
+                            await cmd.ExecuteScalarAsync()
+                        );
+
+                    if (saleCount > 0)
+                    {
+                        throw new InvalidOperationException(
+                            "The car already has an approved purchase order."
+                        );
+                    }
+                }
+
+                const string futureRentQuery = @"
+            SELECT COUNT(1)
+            FROM Rent_Orders ro
+            INNER JOIN Orders o
+                ON o.order_id = ro.order_id
+            WHERE o.car_id = @car_id
+              AND o.order_status IN
+                  (
+                      @approved_status,
+                      @completed_status
+                  )
+              AND ro.end_date > GETUTCDATE();";
+
+                using var rentCmd = new SqlCommand(
+                    futureRentQuery,
+                    conn
+                );
+
+                rentCmd.Parameters.AddWithValue(
+                    "@car_id",
+                    carId
+                );
+
+                rentCmd.Parameters.AddWithValue(
+                    "@approved_status",
+                    (int)OrderStatus.Approved
+                );
+
+                rentCmd.Parameters.AddWithValue(
+                    "@completed_status",
+                    (int)OrderStatus.Completed
+                );
+
+                int futureRentCount =
+                    Convert.ToInt32(
+                        await rentCmd.ExecuteScalarAsync()
+                    );
+
+                if (futureRentCount > 0)
+                {
+                    throw new InvalidOperationException(
+                        "The car has an active or future rental."
+                    );
+                }
+            }
+        }
+        private static bool IsAllowedOrderStatusTransition(
+    OrderStatus currentStatus,
+    OrderStatus newStatus)
+        {
+            return currentStatus switch
+            {
+                OrderStatus.Pending =>
+                    newStatus == OrderStatus.Approved ||
+                    newStatus == OrderStatus.Rejected ||
+                    newStatus == OrderStatus.Canceled,
+
+                OrderStatus.Approved =>
+                    newStatus == OrderStatus.Canceled,
+
+                _ => false
+            };
+        }
+    }
+}
